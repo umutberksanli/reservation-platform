@@ -110,6 +110,74 @@ class SchemaConstraintsTest {
                 .hasMessageContaining("chk_reservation_status");
     }
 
+    // ---------- V3: bekleme listesi ----------
+
+    @Test
+    void userCannotBeConfirmedAndWaitlistedForSameEvent() {
+        long[] ids = eventAndUser("v3-both@example.com");
+        insertReservation(ids[0], ids[1], "CONFIRMED");
+
+        assertThatThrownBy(() -> insertWaitlisted(ids[0], ids[1], 1))
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("uk_reservation_active_user_event");
+    }
+
+    @Test
+    void userCannotEnterWaitlistTwice() {
+        long[] ids = eventAndUser("v3-twice@example.com");
+        insertWaitlisted(ids[0], ids[1], 1);
+
+        assertThatThrownBy(() -> insertWaitlisted(ids[0], ids[1], 2))
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("uk_reservation_active_user_event");
+    }
+
+    @Test
+    void waitlistNumberIsUniquePerEvent() {
+        long[] ids = eventAndUser("v3-number-a@example.com");
+        insertUser("v3-number-b@example.com", "B");
+        long otherUser = lastId();
+        insertWaitlisted(ids[0], ids[1], 1);
+
+        assertThatThrownBy(() -> insertWaitlisted(ids[0], otherUser, 1))
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("uk_reservation_event_waitlist_number");
+    }
+
+    @Test
+    void waitlistedRowNeedsAPositiveNumber() {
+        long[] ids = eventAndUser("v3-null@example.com");
+
+        assertThatThrownBy(() -> insertReservation(ids[0], ids[1], "WAITLISTED"))
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("chk_reservation_waitlisted_has_number");
+        assertThatThrownBy(() -> insertWaitlisted(ids[0], ids[1], 0))
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("chk_reservation_waitlist_number_positive");
+    }
+
+    @Test
+    void cancelledRowDoesNotBlockNewWaitlistEntry() {
+        long[] ids = eventAndUser("v3-cancel@example.com");
+        jdbc.update("INSERT INTO reservation (event_id, user_id, status, waitlist_number) VALUES (?, ?, 'CANCELLED', 1)",
+                ids[0], ids[1]);
+
+        assertThat(insertWaitlisted(ids[0], ids[1], 2)).isEqualTo(1);
+    }
+
+    private long[] eventAndUser(String email) {
+        insertEvent("V3 Etkinlik", 1);
+        long eventId = lastId();
+        insertUser(email, "V3 Kullanici");
+        return new long[] {eventId, lastId()};
+    }
+
+    private int insertWaitlisted(long eventId, long userId, int number) {
+        return jdbc.update(
+                "INSERT INTO reservation (event_id, user_id, status, waitlist_number) VALUES (?, ?, 'WAITLISTED', ?)",
+                eventId, userId, number);
+    }
+
     private int insertEvent(String name, int capacity) {
         return jdbc.update(
                 "INSERT INTO event (name, starts_at, capacity) VALUES (?, '2027-01-15 19:00:00', ?)",
