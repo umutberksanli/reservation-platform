@@ -1,16 +1,133 @@
 # reservation-platform
 
-Kontenjanlı etkinlik rezervasyonu ve FIFO (ilk gelen ilk alır) bekleme listesi sunan bir REST API.
+[![CI](https://github.com/umutberksanli/reservation-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/umutberksanli/reservation-platform/actions/workflows/ci.yml)
 
-> Durum: **7. aşama – FIFO bekleme listesi, iptal ve otomatik terfi.** Aynı anda gelen istekler kapasiteyi aşamaz, sıradaki kimse atlanmaz.
+Kontenjanlı etkinlik rezervasyonu ve **FIFO bekleme listesi** sunan bir REST API (Java 21, Spring Boot 4.2, MySQL).
+Projenin asıl konusu **eşzamanlılık**: aynı anda gelen istekler kapasiteyi aşamaz, iptal edilen yer aynı işlemde sıradakine geçer
+ve sıradaki kimse atlanmaz. Bu kurallar gerçek MySQL'e karşı, gerçek HTTP istekleriyle çalışan eşzamanlılık testleriyle kanıtlanır.
+
+**Öne çıkanlar**
+
+- Kapasite güvenliği: etkinlik satırı kilidi (`SELECT … FOR UPDATE`) + `READ COMMITTED`; neden bu ikisinin birlikte gerektiği ölçülerek gösterildi.
+- FIFO bekleme listesi: kalıcı sıra numarası, iptalde aynı transaction'da terfi, tekrarlanan iptal idempotent.
+- Kuralların bir kısmı **veritabanında** da korunur (foreign key, `CHECK`, "tek aktif kayıt" benzersizliği).
+- JWT ile kimlik doğrulama, sahiplik/rol kontrolü; tüm hatalar `application/problem+json` ve sabit bir `code` ile.
+- Flyway migration'ları, OpenAPI/Swagger UI, Docker Compose, GitHub Actions (Testcontainers + Compose duman testi).
 
 ## Teknolojiler
 
-- Java 21 (JDK 21 veya üstüyle derlenir)
-- Spring Boot 4.2 (Spring Web MVC, Spring Data JPA)
-- MySQL 8+ (MySQL Connector/J)
-- Flyway (sürümlü veritabanı migration'ları)
+- Java 21, Spring Boot 4.2 (Web MVC, Data JPA, Validation, Security, OAuth2 Resource Server)
+- MySQL 8.4+ (Connector/J), Flyway
+- JWT (HS256, Nimbus), BCrypt
+- springdoc-openapi (Swagger UI)
+- JUnit 5, MockMvc, Testcontainers (MySQL)
+- Docker, Docker Compose, GitHub Actions
 - Maven Wrapper (Maven kurmak gerekmez)
+
+## Hızlı başlangıç
+
+İki çalıştırma yolu var. Docker varsa **A** en kısa yoldur; Windows'ta Docker yoksa **B**.
+
+### A) Docker Compose (Windows / macOS / Linux)
+
+Gerekenler: Docker Desktop (ya da Docker Engine + Compose v2). Java veya MySQL kurmak gerekmez.
+
+```bash
+cp .env.example .env          # Windows PowerShell: Copy-Item .env.example .env
+# .env içindeki değerleri kendi güçlü değerlerinle değiştir (JWT_SECRET en az 32 karakter)
+docker compose up -d --build
+```
+
+- API: <http://localhost:8080> · Swagger UI: <http://localhost:8080/swagger-ui.html>
+- `.env`'deki `ADMIN_EMAIL` / `ADMIN_PASSWORD` ile açılışta bir **ADMIN** oluşturulur (etkinlik oluşturmak için gerekir).
+- Uçtan uca kontrol (bash + curl + jq): `set -a; . ./.env; set +a; bash scripts/smoke-test.sh`
+- Durdurmak: `docker compose down` · Verileri de silmek: `docker compose down -v`
+
+MySQL portu dışarı açılmaz; API yalnızca `127.0.0.1:8080`'den erişilebilir. `.env` Git'e girmez (`.gitignore`).
+Bu yol her push'ta CI'daki **Docker Compose smoke test** işi tarafından baştan sona çalıştırılır.
+
+### B) Windows, Docker olmadan (yerel MySQL ile)
+
+Gerekenler: JDK 21+ ve bilgisayarda kurulu MySQL 8.4+ (programı; mevcut sunucuna/verilerine dokunulmaz).
+
+```powershell
+# 1) Projeye özel MySQL (port 3307), veritabanları ve rastgele şifreler — bir kez; yönetici izni gerekmez
+powershell -ExecutionPolicy Bypass -File .\scripts\dev-mysql.ps1 init
+
+# 2) İlk admin (istersen) — kendi seçtiğin şifreyle, kullanıcı ortam değişkeni olarak
+[Environment]::SetEnvironmentVariable("ADMIN_EMAIL", "admin@example.com", "User")
+[Environment]::SetEnvironmentVariable("ADMIN_PASSWORD", "BURAYA-GUCLU-BIR-SIFRE", "User")
+
+# 3) Terminali kapatıp YENİ bir terminal aç (yeni değişkenleri ancak yeni açılan programlar görür), sonra:
+.\mvnw.cmd spring-boot:run
+```
+
+`init`; `DB_URL`, `DB_TEST_URL`, `DB_PASSWORD` ve `JWT_SECRET` değişkenlerini **kullanıcı ortam değişkeni** olarak ayarlar
+(şifreler ekrana/log'a yazılmaz, repoya girmez). Bilgisayar yeniden başladıktan sonra yalnızca:
+`powershell -ExecutionPolicy Bypass -File .\scripts\dev-mysql.ps1 start`. Ayrıntılar: [Veritabanı](#veritabanı).
+
+İlk açılışta Flyway tüm migration'ları (V1–V4) uygular. Kontrol: <http://localhost:8080/api/health> → `{"status":"UP",...}`.
+
+### Testler
+
+```powershell
+.\mvnw.cmd test      # macOS/Linux: ./mvnw test
+```
+
+`DB_TEST_URL` tanımlıysa (B yolu) o veritabanı, değilse Docker ile geçici bir MySQL 8.4 konteyneri kullanılır.
+İkisi de yoksa testler açık bir hatayla durur; **hiçbir test sessizce atlanmaz**. Ayrıntılar: [Testler](#testler).
+
+### Uçtan uca API turu (PowerShell)
+
+Uygulama çalışırken, ayrı bir PowerShell penceresinde (A ya da B yolu; admin bilgileri ortam değişkenlerinden):
+
+```powershell
+$api = 'http://localhost:8080'
+function Post($path, $body, $token) {
+  $h = @{}; if ($token) { $h.Authorization = "Bearer $token" }
+  Invoke-RestMethod -Method Post -Uri "$api$path" -Headers $h -ContentType 'application/json' -Body ($body | ConvertTo-Json)
+}
+function Login($email, $password) { (Post '/api/auth/token' @{ email = $email; password = $password }).accessToken }
+
+# Admin girişi ve kapasitesi 1 olan bir etkinlik
+$admin = Login $env:ADMIN_EMAIL $env:ADMIN_PASSWORD
+$event = Post '/api/events' @{ name = 'Kucuk Atolye'; startsAt = '2027-01-15T19:00:00Z'; capacity = 1 } $admin
+
+# İki kullanıcı kaydolur ve giriş yapar
+$ayseUser = Post '/api/users' @{ email = 'ayse@example.com'; fullName = 'Ayse'; password = 'ayse-sifre-123' }
+$mehmetUser = Post '/api/users' @{ email = 'mehmet@example.com'; fullName = 'Mehmet'; password = 'mehmet-sifre-123' }
+$ayse = Login 'ayse@example.com' 'ayse-sifre-123'
+$mehmet = Login 'mehmet@example.com' 'mehmet-sifre-123'
+
+# Ayşe yer alır (201 CONFIRMED), Mehmet sıraya girer (202 WAITLISTED, konum 1)
+$r1 = Post "/api/events/$($event.id)/reservations" @{} $ayse
+$r2 = Post "/api/events/$($event.id)/reservations" @{} $mehmet
+"$($r1.status) / $($r2.status) konum $($r2.waitlistPosition)"
+
+# Ayşe iptal eder -> Mehmet AYNI istekte onaylanır
+$c = Post "/api/reservations/$($r1.id)/cancel" @{} $ayse
+"terfi eden kullanici: $($c.promoted[0].userId) (Mehmet: $($mehmetUser.id))"
+
+# Mehmet kendi kayıtlarını listeler
+Invoke-RestMethod "$api/api/users/me/reservations" -Headers @{ Authorization = "Bearer $mehmet" } | ConvertTo-Json -Depth 5
+```
+
+## Proje yapısı
+
+```text
+src/main/java/com/umutberk/eventreservation/
+  event/         Etkinlik: entity, repository, servis, controller, DTO'lar
+  user/          Kullanıcı kaydı ve detayı
+  reservation/   Rezervasyon, bekleme listesi, iptal/terfi (eşzamanlılık kuralları burada)
+  security/      JWT üretimi/doğrulaması, giriş, sahiplik (Actor), ilk admin
+  common/        Hata cevapları (problem+json), sayfalama, OpenAPI
+src/main/resources/db/migration/   Flyway V1–V4 (uygulanmış migration değiştirilmez)
+src/test/java/...                  MockMvc API testleri, şema testleri, eşzamanlılık testleri
+scripts/dev-mysql.ps1              Windows: projeye özel yerel MySQL (port 3307)
+scripts/smoke-test.sh              Çalışan ortama uçtan uca HTTP duman testi
+Dockerfile, docker-compose.yml     Konteyner imajı ve uygulama + MySQL yığını
+.github/workflows/ci.yml           CI: testler (Testcontainers) + Compose duman testi
+```
 
 ## Veritabanı
 
@@ -46,7 +163,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\dev-mysql.ps1 stop
 
 `init`:
 - Rastgele şifreler üretir ve yalnızca Windows **kullanıcı ortam değişkenlerine** kaydeder
-  (`DB_PASSWORD`, `RESERVATION_MYSQL_ROOT_PASSWORD`); şifreler ekrana veya log'a yazılmaz.
+  (`DB_PASSWORD`, `RESERVATION_MYSQL_ROOT_PASSWORD`, `JWT_SECRET`); şifreler ekrana veya log'a yazılmaz.
 - `reservation_platform` (geliştirme) ve `reservation_platform_test` (testler) veritabanlarını oluşturur.
 - `DB_URL` ve `DB_TEST_URL` değişkenlerini port 3307'yi gösterecek şekilde ayarlar.
 - Tekrar çalıştırılabilir: mevcut kurulumda eksik veritabanlarını ve yetkileri tamamlar.
@@ -106,18 +223,6 @@ Flyway uygulananları `flyway_schema_history` tablosuna yazar; bir migration iki
 - **Kısıtlara isim verildi** (`chk_event_capacity_positive`, `uk_app_user_email` …), böylece hata mesajlarında hangi kuralın ihlal edildiği okunabilir.
 - **Zaman:** `DATETIME` saat dilimi bilgisi tutmaz; bu yüzden tüm zamanlar **UTC** olarak saklanır
   (`spring.jpa.properties.hibernate.jdbc.time_zone=UTC`). API'de zamanlar ISO-8601 UTC biçimindedir: `2027-01-15T19:00:00Z`.
-
-## Çalıştırma (Windows)
-
-```powershell
-.\mvnw.cmd spring-boot:run
-```
-
-Ardından tarayıcıda: <http://localhost:8080/api/health>
-
-```json
-{"status":"UP","app":"event-reservation"}
-```
 
 ## Kimlik doğrulama ve yetki
 
@@ -492,15 +597,29 @@ Testler her zaman **ayrı test veritabanını** kullanır; geliştirme verisine 
     terfi edenlerin numarası hâlâ bekleyenlerin hepsinden küçük (**kimse atlanmadı**); bekleyen numaraları tekrarsız ve sıralı.
   - `SchemaConstraintsTest` V2/V3 kurallarını da dener: foreign key'ler, tek aktif kayıt (onaylı + bekleyen birlikte olamaz, sıraya iki kez girilemez),
     sıra numarasının etkinlik içinde tekilliği, pozitifliği ve bekleyende zorunluluğu, iptal edilmiş kayıtların engellememesi.
+    V4: varsayılan rol `USER`, geçersiz rol reddedilir.
+  - `UserReservationsApiTest`: kendi kayıtlarını listeleme — en yeni önce, etkinlik özeti, sıra konumu, durum filtresi,
+    sayfalama, geçersiz parametre (400), başkasının listesi (403), `/me/reservations`.
+  - `AuthApiTest` (**gerçek token'larla**): kayıt → giriş → token ile `/me`; yanlış şifre ile bilinmeyen e-postanın aynı cevabı;
+    şifresiz eski kullanıcı; süresi dolmuş, başka anahtarla imzalanmış, değiştirilmiş ve başka `iss`'li token'ların reddi.
+  - `AdminBootstrapTest`: `ADMIN_EMAIL`/`ADMIN_PASSWORD` ile oluşan admin gerçek giriş yapıp etkinlik oluşturabilir.
+  - `ErrorResponsesApiTest`: her hata türünde aynı `problem+json` biçimi, `code` ve `instance`; 500'de iç ayrıntı sızmaz; 401/403.
+  - `OpenApiDocsTest`: doküman tokensiz açılır, Bearer şeması doğru; dokümanda herkese açık görünen her uç gerçekten token istemez.
 
-## Yol haritası
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) her push'ta testleri Testcontainers ile çalıştırır, toplamları
+herkese açık bir *notice* olarak yayımlar (hiç test çalışmadıysa ya da atlanan varsa iş başarısız sayılır) ve ardından
+Docker Compose yığınını kurup [`scripts/smoke-test.sh`](scripts/smoke-test.sh) ile uçtan uca dener.
 
-1. [x] Spring Web iskeleti
-2. [x] MySQL bağlantısı
-3. [x] Flyway ve ilk şema (`event`, `app_user`)
-4. [x] Etkinlik API'si (oluşturma, listeleme, detay)
-5. [x] Kullanıcı kaydı API'si (kayıt + detay)
-6. [x] Kontenjanlı rezervasyon ve eşzamanlılık testi
-7. [x] Rezervasyon iptali
-8. [x] FIFO bekleme listesi ve iptalde otomatik terfi
-9. [x] Kimlik doğrulama (JWT) ve yetki: yalnızca sahibi ya da ADMIN iptal edebilir
+## Durum ve sonraki adımlar
+
+Tamamlananlar: etkinlik ve kullanıcı API'leri, kontenjanlı rezervasyon, FIFO bekleme listesi, iptal ve otomatik terfi,
+kullanıcının kendi kayıtlarını sayfalı listelemesi, JWT kimlik doğrulama ve sahiplik/rol kontrolü, tutarlı hata cevapları,
+OpenAPI, taşınabilir testler, CI, Docker Compose.
+
+Bilinçli olarak kapsam dışı (gerçek bir üründe sıradaki adımlar):
+
+- Refresh token / çıkış (token iptali); şu an token'lar 1 saat geçerli ve sunucuda tutulmaz.
+- Etkinlik güncelleme/iptal etme ve etkinlik listesinde sayfalama/filtre.
+- Terfi edilen kullanıcıya bildirim (e-posta vb.).
+- Hız sınırlama (özellikle giriş ucunda).
+- Çok yoğun tek bir etkinlikte satır kilidi darboğaz olabilir; o ölçekte sayaç + atomik güncelleme ya da kuyruk tabanlı tasarım değerlendirilir.

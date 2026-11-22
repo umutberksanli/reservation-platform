@@ -10,7 +10,7 @@
 #   powershell -ExecutionPolicy Bypass -File .\scripts\dev-mysql.ps1 status
 #
 # Secrets: passwords are generated randomly and stored only as Windows *User*
-# environment variables (DB_PASSWORD, RESERVATION_MYSQL_ROOT_PASSWORD).
+# environment variables (DB_PASSWORD, RESERVATION_MYSQL_ROOT_PASSWORD, JWT_SECRET).
 # They are never printed and never written to the repository.
 
 param(
@@ -38,19 +38,19 @@ function Get-Secret([string]$Name) {
     return $v
 }
 
-function New-Secret {
+function New-Secret([int]$Length = 28) {
     $chars = [char[]]'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
-    $bytes = New-Object byte[] 28
+    $bytes = New-Object byte[] $Length
     $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
     $rng.GetBytes($bytes)
     $rng.Dispose()
     return -join ($bytes | ForEach-Object { $chars[$_ % $chars.Length] })
 }
 
-function Initialize-Secret([string]$Name) {
+function Initialize-Secret([string]$Name, [int]$Length = 28) {
     $v = Get-Secret $Name
     if ([string]::IsNullOrEmpty($v)) {
-        $v = New-Secret
+        $v = New-Secret $Length
         [Environment]::SetEnvironmentVariable($Name, $v, 'User')
         Write-Host "$Name generated and saved as a User environment variable (value not shown)."
     }
@@ -114,6 +114,8 @@ GRANT ALL PRIVILEGES ON $TestDb.* TO '$DbUser'@'localhost';
     Write-Host "Databases '$DbName' and '$TestDb' are ready for '$DbUser'@'localhost'."
     Write-Host "DB_URL=$DbUrl"
     Write-Host "DB_TEST_URL=$TestUrl"
+    # Uygulamanin JWT imza anahtari (en az 32 karakter). Yoksa uretilir; varsa dokunulmaz.
+    Initialize-Secret 'JWT_SECRET' 48 | Out-Null
 }
 
 function Initialize-Server {
