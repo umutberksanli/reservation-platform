@@ -10,6 +10,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static com.umutberk.eventreservation.support.TestAuth.asAdmin;
+import static com.umutberk.eventreservation.support.TestAuth.asUser;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -56,7 +58,7 @@ class ErrorResponsesApiTest {
     @Test
     void invalidBodyListsEveryInvalidField() throws Exception {
         problem(mockMvc.perform(post("/api/users").contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"email\": \"not-an-email\", \"fullName\": \"\"}")),
+                        .content("{\"email\": \"not-an-email\", \"fullName\": \"\", \"password\": \"gecerli-sifre-1\"}")),
                 400, "VALIDATION_FAILED", "/api/users")
                 .andExpect(jsonPath("$.detail").value("Request body has invalid fields"))
                 .andExpect(jsonPath("$.errors[*].field", containsInAnyOrder("email", "fullName")))
@@ -65,7 +67,7 @@ class ErrorResponsesApiTest {
 
     @Test
     void invalidQueryParameterIsReportedByName() throws Exception {
-        problem(mockMvc.perform(get("/api/users/1/reservations?size=0")), 400, "VALIDATION_FAILED",
+        problem(mockMvc.perform(get("/api/users/1/reservations?size=0").with(asAdmin(1))), 400, "VALIDATION_FAILED",
                 "/api/users/1/reservations")
                 .andExpect(jsonPath("$.errors[0].field").value("size"));
     }
@@ -83,12 +85,12 @@ class ErrorResponsesApiTest {
 
     @Test
     void unknownPath() throws Exception {
-        problem(mockMvc.perform(get("/api/does-not-exist")), 404, "NOT_FOUND", "/api/does-not-exist");
+        problem(mockMvc.perform(get("/api/does-not-exist").with(asUser(1))), 404, "NOT_FOUND", "/api/does-not-exist");
     }
 
     @Test
     void wrongMethodListsAllowedMethods() throws Exception {
-        problem(mockMvc.perform(delete("/api/events")), 405, "METHOD_NOT_ALLOWED", "/api/events")
+        problem(mockMvc.perform(delete("/api/events").with(asUser(1))), 405, "METHOD_NOT_ALLOWED", "/api/events")
                 .andExpect(header().string("Allow", containsString("GET")));
     }
 
@@ -106,7 +108,7 @@ class ErrorResponsesApiTest {
 
     @Test
     void unexpectedErrorDoesNotLeakDetails() throws Exception {
-        problem(mockMvc.perform(get("/test-only/boom")), 500, "INTERNAL_ERROR", "/test-only/boom")
+        problem(mockMvc.perform(get("/test-only/boom").with(asUser(1))), 500, "INTERNAL_ERROR", "/test-only/boom")
                 .andExpect(jsonPath("$.detail").value("An unexpected error occurred"))
                 .andExpect(content().string(not(containsString("gizli-ic-ayrinti"))))
                 .andExpect(content().string(not(containsString("IllegalStateException"))));
@@ -114,8 +116,28 @@ class ErrorResponsesApiTest {
 
     @Test
     void lockTimeoutAsksClientToRetry() throws Exception {
-        problem(mockMvc.perform(get("/test-only/lock-timeout")), 503, "SERVICE_BUSY", "/test-only/lock-timeout")
+        problem(mockMvc.perform(get("/test-only/lock-timeout").with(asUser(1))), 503, "SERVICE_BUSY", "/test-only/lock-timeout")
                 .andExpect(header().string("Retry-After", "1"));
+    }
+
+    @Test
+    void missingTokenOnProtectedEndpoint() throws Exception {
+        problem(mockMvc.perform(get("/api/users/me")), 401, "UNAUTHORIZED", "/api/users/me")
+                .andExpect(header().string("WWW-Authenticate", "Bearer"));
+    }
+
+    @Test
+    void invalidTokenIsRejectedByTheRealDecoder() throws Exception {
+        problem(mockMvc.perform(get("/api/users/me").header("Authorization", "Bearer bozuk.token.degeri")),
+                401, "UNAUTHORIZED", "/api/users/me")
+                .andExpect(header().string("WWW-Authenticate", containsString("invalid_token")));
+    }
+
+    @Test
+    void insufficientRole() throws Exception {
+        problem(mockMvc.perform(post("/api/events").with(asUser(1)).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\": \"X\", \"startsAt\": \"2027-01-15T19:00:00Z\", \"capacity\": 3}")),
+                403, "FORBIDDEN", "/api/events");
     }
 
     /** Ortak bicim: dogru durum kodu, problem+json, code ve instance. */

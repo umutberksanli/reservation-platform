@@ -3,6 +3,7 @@ package com.umutberk.eventreservation.user;
 import java.util.Locale;
 
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -16,9 +17,11 @@ public class AppUserService {
     static final String EMAIL_UNIQUE_CONSTRAINT = "uk_app_user_email";
 
     private final AppUserRepository appUserRepository;
+    private final PasswordEncoder passwordEncoder;
 
-    public AppUserService(AppUserRepository appUserRepository) {
+    public AppUserService(AppUserRepository appUserRepository, PasswordEncoder passwordEncoder) {
         this.appUserRepository = appUserRepository;
+        this.passwordEncoder = passwordEncoder;
     }
 
     /**
@@ -35,7 +38,9 @@ public class AppUserService {
             throw new EmailAlreadyRegisteredException(null);
         }
         try {
-            AppUser saved = appUserRepository.saveAndFlush(new AppUser(email, request.fullName()));
+            // Yeni kayit her zaman USER'dir; ADMIN yalnizca AdminBootstrap ile verilir. Sifre BCrypt ile ozetlenir.
+            AppUser saved = appUserRepository.saveAndFlush(new AppUser(email, request.fullName(),
+                    passwordEncoder.encode(request.password()), UserRole.USER));
             return UserResponse.from(saved);
         }
         catch (DataIntegrityViolationException ex) {

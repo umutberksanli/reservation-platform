@@ -8,6 +8,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static com.umutberk.eventreservation.support.TestAuth.asAdmin;
+import static com.umutberk.eventreservation.support.TestAuth.asUser;
 
 import java.util.UUID;
 
@@ -77,7 +79,7 @@ class UserReservationsApiTest {
         long a = createEvent("A", 5);
         long b = createEvent("B", 5);
         long cancelledId = idOf(reserve(a, user));
-        mockMvc.perform(post("/api/reservations/{id}/cancel", cancelledId)).andExpect(status().isOk());
+        mockMvc.perform(post("/api/reservations/{id}/cancel", cancelledId).with(asUser(user))).andExpect(status().isOk());
         reserve(b, user);
 
         list(user, "?status=CANCELLED")
@@ -125,7 +127,7 @@ class UserReservationsApiTest {
     void unknownUserReturns404() throws Exception {
         long missing = jdbc.queryForObject("SELECT COALESCE(MAX(id), 0) + 1000 FROM app_user", Long.class);
 
-        list(missing, "")
+        mockMvc.perform(get("/api/users/" + missing + "/reservations").with(asAdmin(1)))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("USER_NOT_FOUND"));
     }
@@ -138,16 +140,47 @@ class UserReservationsApiTest {
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
     }
 
+    // ------------------------------------------------------------ yetki
+
+    @Test
+    void userCannotListSomeoneElsesReservationsButAdminCan() throws Exception {
+        long owner = createUser();
+        long stranger = createUser();
+        reserve(createEvent("Ozel", 5), owner);
+
+        mockMvc.perform(get("/api/users/" + owner + "/reservations").with(asUser(stranger)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+        mockMvc.perform(get("/api/users/" + owner + "/reservations").with(asAdmin(stranger)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(1));
+        mockMvc.perform(get("/api/users/" + owner + "/reservations"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void meShortcutListsTheAuthenticatedUsersReservations() throws Exception {
+        long user = createUser();
+        long other = createUser();
+        long eventId = createEvent("Benim", 5);
+        long mine = idOf(reserve(eventId, user));
+        reserve(eventId, other);
+
+        mockMvc.perform(get("/api/users/me/reservations").with(asUser(user)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.content[0].id").value(mine));
+    }
+
     // ------------------------------------------------------------ yardimcilar
 
+    /** Kullanici kendi listesini kendi token'iyla ister. */
     private ResultActions list(long userId, String query) throws Exception {
-        return mockMvc.perform(get("/api/users/" + userId + "/reservations" + query));
+        return mockMvc.perform(get("/api/users/" + userId + "/reservations" + query).with(asUser(userId)));
     }
 
     private ResultActions reserve(long eventId, long userId) throws Exception {
-        return mockMvc.perform(post("/api/events/{eventId}/reservations", eventId)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"userId\": " + userId + "}"));
+        return mockMvc.perform(post("/api/events/{eventId}/reservations", eventId).with(asUser(userId)));
     }
 
     private static long idOf(ResultActions result) throws Exception {

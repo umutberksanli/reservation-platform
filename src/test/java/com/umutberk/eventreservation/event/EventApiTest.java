@@ -11,6 +11,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static com.umutberk.eventreservation.support.TestAuth.asAdmin;
+import static com.umutberk.eventreservation.support.TestAuth.asUser;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -43,7 +45,7 @@ class EventApiTest {
 
     @Test
     void createReturns201WithLocationAndStoresEvent() throws Exception {
-        String location = mockMvc.perform(post("/api/events")
+        String location = mockMvc.perform(post("/api/events").with(asAdmin(1))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"name": "  Spring Boot Workshop ", "startsAt": "2027-01-15T19:00:00Z", "capacity": 30}
@@ -115,7 +117,7 @@ class EventApiTest {
     void createRejectsInvalidRequestWith400() throws Exception {
         int before = jdbc.queryForObject("SELECT COUNT(*) FROM event", Integer.class);
 
-        mockMvc.perform(post("/api/events")
+        mockMvc.perform(post("/api/events").with(asAdmin(1))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"name": " ", "startsAt": "2027-01-15T19:00:00Z", "capacity": 0}
@@ -125,8 +127,44 @@ class EventApiTest {
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM event", Integer.class)).isEqualTo(before);
     }
 
+    // ------------------------------------------------------------ yetki
+
+    @Test
+    void creatingEventWithoutTokenReturns401() throws Exception {
+        int before = jdbc.queryForObject("SELECT COUNT(*) FROM event", Integer.class);
+
+        mockMvc.perform(post("/api/events").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\": \"X\", \"startsAt\": \"2027-01-15T19:00:00Z\", \"capacity\": 3}"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM event", Integer.class)).isEqualTo(before);
+    }
+
+    @Test
+    void creatingEventAsNormalUserReturns403() throws Exception {
+        int before = jdbc.queryForObject("SELECT COUNT(*) FROM event", Integer.class);
+
+        mockMvc.perform(post("/api/events").with(asUser(1)).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\": \"X\", \"startsAt\": \"2027-01-15T19:00:00Z\", \"capacity\": 3}"))
+                .andExpect(status().isForbidden())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM event", Integer.class)).isEqualTo(before);
+    }
+
+    @Test
+    void listingAndDetailArePublic() throws Exception {
+        createEvent("Herkese Acik", "2027-07-01T10:00:00Z", 10);
+
+        mockMvc.perform(get("/api/events")).andExpect(status().isOk());
+        mockMvc.perform(get("/api/events/{id}", lastInsertedId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name").value("Herkese Acik"));
+    }
+
     private void createEvent(String name, String startsAt, int capacity) throws Exception {
-        mockMvc.perform(post("/api/events")
+        mockMvc.perform(post("/api/events").with(asAdmin(1))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"name": "%s", "startsAt": "%s", "capacity": %d}

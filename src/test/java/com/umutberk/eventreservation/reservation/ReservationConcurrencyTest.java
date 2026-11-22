@@ -35,6 +35,9 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
+import com.umutberk.eventreservation.security.JwtTokenService;
+import com.umutberk.eventreservation.user.UserRole;
+
 /**
  * Projenin kritik sarti: ayni anda gelen istekler kapasiteyi ASMAMALI ve siradaki kimse ATLANMAMALI.
  *
@@ -54,6 +57,10 @@ class ReservationConcurrencyTest {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    /** Istekler gercek, imzali JWT'lerle gider; sunucu bunlari gercek dogrulayicidan gecirir. */
+    @Autowired
+    private JwtTokenService tokens;
 
     private final HttpClient http = HttpClient.newBuilder()
             .version(HttpClient.Version.HTTP_1_1)
@@ -132,7 +139,11 @@ class ReservationConcurrencyTest {
         }
 
         List<Callable<Result>> tasks = new ArrayList<>();
-        confirmedReservationIds.forEach(id -> tasks.add(() -> cancel(id)));
+        for (int i = 0; i < confirmedReservationIds.size(); i++) {
+            long id = confirmedReservationIds.get(i);
+            long owner = confirmedUsers.get(i);
+            tasks.add(() -> cancel(id, owner));
+        }
         newcomers.forEach(u -> tasks.add(() -> reserve(eventId, u)));
         Collections.shuffle(tasks);
         List<Result> results = sendSimultaneously(tasks);
@@ -153,13 +164,14 @@ class ReservationConcurrencyTest {
     @Test
     void simultaneousRepeatedCancelPromotesOnlyOnce() throws Exception {
         long eventId = createEvent(1);
-        long confirmedId = reserve(eventId, createUsers(1).get(0)).id();
+        long confirmedOwner = createUsers(1).get(0);
+        long confirmedId = reserve(eventId, confirmedOwner).id();
         List<Long> waiters = createUsers(3);
         for (long u : waiters) {
             reserve(eventId, u);
         }
 
-        List<Result> results = sendSimultaneously(Collections.nCopies(10, () -> cancel(confirmedId)));
+        List<Result> results = sendSimultaneously(Collections.nCopies(10, () -> cancel(confirmedId, confirmedOwner)));
 
         log("D ayni iptal x10", results, eventId);
         assertThat(summarize(results)).containsExactlyInAnyOrderEntriesOf(Map.of("200", 10L));
@@ -204,19 +216,22 @@ class ReservationConcurrencyTest {
         }
     }
 
+    /** Kullanici kendi token'iyla, kendi adina rezervasyon yapar. */
     private Result reserve(long eventId, long userId) {
-        return send("/api/events/" + eventId + "/reservations", "{\"userId\": " + userId + "}");
+        return send("/api/events/" + eventId + "/reservations", "", userId);
     }
 
-    private Result cancel(long reservationId) {
-        return send("/api/reservations/" + reservationId + "/cancel", "");
+    /** Kaydin sahibi kendi token'iyla iptal eder. */
+    private Result cancel(long reservationId, long ownerUserId) {
+        return send("/api/reservations/" + reservationId + "/cancel", "", ownerUserId);
     }
 
-    private Result send(String path, String body) {
+    private Result send(String path, String body, long userId) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create("http://localhost:" + port + path))
                     .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + tokens.issue(userId, UserRole.USER).accessToken())
                     .timeout(Duration.ofSeconds(60))
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
