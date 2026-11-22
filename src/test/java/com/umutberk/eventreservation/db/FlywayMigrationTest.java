@@ -35,17 +35,23 @@ class FlywayMigrationTest {
             JdbcTemplate jdbc = app.getBean(JdbcTemplate.class);
 
             historyAfterFirstStart = appliedMigrations(jdbc);
-            assertThat(historyAfterFirstStart).hasSize(1);
+            assertThat(historyAfterFirstStart).hasSize(2);
             assertThat(historyAfterFirstStart.get(0))
                     .containsEntry("version", "1")
                     .containsEntry("description", "create event and app user")
                     .containsEntry("success", true);
+            assertThat(historyAfterFirstStart.get(1))
+                    .containsEntry("version", "2")
+                    .containsEntry("description", "create reservation")
+                    .containsEntry("success", true);
 
-            assertThat(tableNames(jdbc)).contains("event", "app_user");
+            assertThat(tableNames(jdbc)).contains("event", "app_user", "reservation");
             assertThat(columnNames(jdbc, "event"))
                     .containsExactly("id", "name", "starts_at", "capacity", "created_at");
             assertThat(columnNames(jdbc, "app_user"))
                     .containsExactly("id", "email", "full_name", "created_at");
+            assertThat(columnNames(jdbc, "reservation"))
+                    .containsExactly("id", "event_id", "user_id", "status", "created_at", "active_key");
         }
 
         // --- 2. acilis ---
