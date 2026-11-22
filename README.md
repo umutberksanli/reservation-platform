@@ -154,6 +154,17 @@ $token = (Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/auth/tok
 curl.exe http://localhost:8080/api/users/me -H "Authorization: Bearer $token"
 ```
 
+## API dokümantasyonu (OpenAPI)
+
+Uygulama çalışırken (token gerekmez):
+
+- **Swagger UI:** <http://localhost:8080/swagger-ui.html> — uçları tarayıcıdan dene. `POST /api/auth/token` ile token al,
+  sağ üstteki **Authorize** düğmesine yapıştır.
+- **OpenAPI JSON:** <http://localhost:8080/v3/api-docs>
+
+Herkese açık uçlar dokümanda kilitsiz görünür; `OpenApiDocsTest`, dokümanda herkese açık görünen her ucun gerçekten de
+token istemediğini sınar (doküman ile güvenlik kuralları birbirinden kopmasın).
+
 ## Etkinlik API'si
 
 | Metot | Adres | Başarılı cevap | Hata |

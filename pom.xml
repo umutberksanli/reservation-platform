@@ -15,6 +15,8 @@
 	<description>Kontenjanli etkinlik rezervasyonu ve FIFO bekleme listesi REST API</description>
 	<properties>
 		<java.version>21</java.version>
+		<!-- Spring Boot 4.2 ile derlenmis springdoc surumu -->
+		<springdoc.version>3.2.1</springdoc.version>
 	</properties>
 	<dependencies>
 		<dependency>
@@ -36,6 +38,11 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-security-oauth2-resource-server</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+			<version>${springdoc.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
