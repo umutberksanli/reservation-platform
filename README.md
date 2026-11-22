@@ -254,6 +254,7 @@ Content-Type: application/problem+json
 | `GET` | `/api/reservations/{id}` | Kaydın durumu ve (bekliyorsa) sıra konumu |
 | `GET` | `/api/events/{eventId}/users/{userId}/reservation` | Kullanıcının o etkinlikteki **aktif** kaydı: durum ve sıra konumu |
 | `POST` | `/api/reservations/{id}/cancel` | Onaylı ya da bekleyen kaydı iptal eder; boşalan yeri sıradakine verir |
+| `GET` | `/api/users/{userId}/reservations?status=&page=0&size=20` | Kullanıcının tüm kayıtları (en yeni önce), etkinlik özeti ve sıra konumuyla; `status` = `CONFIRMED` / `WAITLISTED` / `CANCELLED`, `size` 1–100 |
 
 ### Yanıt kodları
 

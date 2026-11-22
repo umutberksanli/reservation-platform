@@ -9,14 +9,19 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
+import com.umutberk.eventreservation.common.PageResponse;
 import com.umutberk.eventreservation.reservation.dto.CancellationResponse;
 import com.umutberk.eventreservation.reservation.dto.CreateReservationRequest;
 import com.umutberk.eventreservation.reservation.dto.ReservationResponse;
+import com.umutberk.eventreservation.reservation.dto.UserReservationResponse;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 
 @RestController
 @RequestMapping("/api")
@@ -56,6 +61,19 @@ public class ReservationController {
     @GetMapping("/events/{eventId}/users/{userId}/reservation")
     public ReservationResponse getActiveForUser(@PathVariable long eventId, @PathVariable long userId) {
         return reservationService.findActive(eventId, userId);
+    }
+
+    /**
+     * Kullanicinin kendi kayitlari (onayli, bekleyen, iptal), en yeni once, sayfali.
+     * status: CONFIRMED | WAITLISTED | CANCELLED (bos = hepsi); page >= 0; size 1..100.
+     * 404 USER_NOT_FOUND, 400 gecersiz parametre.
+     */
+    @GetMapping("/users/{userId}/reservations")
+    public PageResponse<UserReservationResponse> listForUser(@PathVariable long userId,
+            @RequestParam(required = false) ReservationStatus status,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+        return reservationService.listForUser(userId, status, page, size);
     }
 
     /**
