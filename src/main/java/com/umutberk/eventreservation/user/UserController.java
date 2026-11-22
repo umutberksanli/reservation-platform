@@ -3,6 +3,8 @@ package com.umutberk.eventreservation.user;
 import java.net.URI;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -33,5 +35,11 @@ public class UserController {
                 .buildAndExpand(created.id())
                 .toUri();
         return ResponseEntity.created(location).body(created);
+    }
+
+    /** Kayit cevabindaki Location bu adresi gosterir. Bulunamazsa 404. */
+    @GetMapping("/{id}")
+    public UserResponse get(@PathVariable long id) {
+        return appUserService.findById(id);
     }
 }

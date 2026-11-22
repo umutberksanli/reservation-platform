@@ -165,6 +165,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/events -ContentTyp
 | Metot | Adres | Başarılı cevap | Hata |
 |---|---|---|---|
 | `POST` | `/api/users` | `201 Created` + `Location: /api/users/{id}` | `400` boş/geçersiz alan, `409` e-posta zaten kayıtlı |
+| `GET` | `/api/users/{id}` | `200 OK` | `404` bulunamadı (`code: USER_NOT_FOUND`) |
 
 İstek kuralları (`RegisterUserRequest`): `email` geçerli bir e-posta, en fazla 254 karakter; `fullName` boş olamaz, en fazla 100 karakter.
 Baş/son boşluklar doğrulamadan önce kırpılır. E-posta **küçük harfe çevrilerek** saklanır.
@@ -177,7 +178,11 @@ Baş/son boşluklar doğrulamadan önce kırpılır. E-posta **küçük harfe ç
    Sütunun karşılaştırma ayarı (`utf8mb4_0900_ai_ci`) büyük/küçük harf duyarsız olduğu için
    `AYSE@x.com` ile `ayse@x.com` veritabanında da aynı kabul edilir.
 
-> `Location` adresi kaydın kalıcı adresini gösterir; `GET /api/users/{id}` ucu henüz yok (ilerideki bir aşamada eklenecek).
+Kayıt cevabındaki `Location` adresi `GET /api/users/{id}` ile açılabilir:
+
+```powershell
+curl.exe http://localhost:8080/api/users/1
+```
 
 ### Örnek istekler (PowerShell)
 

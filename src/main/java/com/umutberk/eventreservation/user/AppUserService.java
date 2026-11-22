@@ -46,6 +46,13 @@ public class AppUserService {
         }
     }
 
+    @Transactional(readOnly = true)
+    public UserResponse findById(long id) {
+        return appUserRepository.findById(id)
+                .map(UserResponse::from)
+                .orElseThrow(() -> new UserNotFoundException(id));
+    }
+
     /** E-postalar tek bicimde (kucuk harf) saklanir. Bosluklar DTO'da zaten kirpildi. */
     static String normalizeEmail(String email) {
         return email.toLowerCase(Locale.ROOT);
