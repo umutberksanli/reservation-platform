@@ -20,8 +20,9 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 
 /**
- * "reservation" tablosu (Flyway V2). active_key sutunu MySQL tarafindan hesaplanir
- * ve yalnizca benzersizlik kurali icin vardir; bu yuzden burada eslenmez.
+ * "reservation" tablosu (Flyway V2 + V3). Onayli rezervasyon da, bekleme listesindeki kayit da
+ * bu tablodadir; fark "status" alanindadir. active_key sutunu MySQL tarafindan hesaplanir ve
+ * yalnizca benzersizlik kurali icin vardir; bu yuzden burada eslenmez.
  */
 @Entity
 @Table(name = "reservation")
@@ -43,18 +44,56 @@ public class Reservation {
     @Column(nullable = false, length = 20)
     private ReservationStatus status;
 
+    /** Etkinlik icindeki kalici sira numarasi. Dogrudan onaylananlarda null; terfiden sonra da korunur. */
+    @Column(name = "waitlist_number")
+    private Integer waitlistNumber;
+
     @Generated
     @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
     private Instant createdAt;
 
+    @Column(name = "promoted_at")
+    private Instant promotedAt;
+
+    @Column(name = "cancelled_at")
+    private Instant cancelledAt;
+
     protected Reservation() {
     }
 
-    /** Yeni rezervasyon her zaman CONFIRMED baslar. */
-    public Reservation(Event event, AppUser user) {
+    private Reservation(Event event, AppUser user, ReservationStatus status, Integer waitlistNumber) {
         this.event = event;
         this.user = user;
+        this.status = status;
+        this.waitlistNumber = waitlistNumber;
+    }
+
+    /** Bos yer var: dogrudan onayli. */
+    public static Reservation confirmed(Event event, AppUser user) {
+        return new Reservation(event, user, ReservationStatus.CONFIRMED, null);
+    }
+
+    /** Etkinlik dolu: verilen sira numarasiyla bekleme listesine. */
+    public static Reservation waitlisted(Event event, AppUser user, int waitlistNumber) {
+        return new Reservation(event, user, ReservationStatus.WAITLISTED, waitlistNumber);
+    }
+
+    /** Bekleme listesinden onayli rezervasyona gecis. */
+    public void promote(Instant now) {
+        if (status != ReservationStatus.WAITLISTED) {
+            throw new IllegalStateException("Only a waitlisted reservation can be promoted, was " + status);
+        }
         this.status = ReservationStatus.CONFIRMED;
+        this.promotedAt = now;
+    }
+
+    /** Onayli ya da bekleyen kaydi iptal eder. Sira numarasi tarihce icin korunur. */
+    public void cancel(Instant now) {
+        if (status == ReservationStatus.CANCELLED) {
+            throw new IllegalStateException("Reservation " + id + " is already cancelled");
+        }
+        this.status = ReservationStatus.CANCELLED;
+        this.cancelledAt = now;
     }
 
     public Long getId() {
@@ -73,7 +112,19 @@ public class Reservation {
         return status;
     }
 
+    public Integer getWaitlistNumber() {
+        return waitlistNumber;
+    }
+
     public Instant getCreatedAt() {
         return createdAt;
+    }
+
+    public Instant getPromotedAt() {
+        return promotedAt;
+    }
+
+    public Instant getCancelledAt() {
+        return cancelledAt;
     }
 }
