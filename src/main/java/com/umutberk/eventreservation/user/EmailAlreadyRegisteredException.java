@@ -15,6 +15,7 @@ public class EmailAlreadyRegisteredException extends ErrorResponseException {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(
                 HttpStatus.CONFLICT, "A user with this email address is already registered");
         problem.setTitle("Email already registered");
+        problem.setProperty("code", "EMAIL_ALREADY_REGISTERED");
         return problem;
     }
 }

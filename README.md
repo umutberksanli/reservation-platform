@@ -380,6 +380,32 @@ curl.exe http://localhost:8080/api/events/1/users/3/reservation
 # -> {"id":3,...,"status":"WAITLISTED","waitlistNumber":2,"waitlistPosition":1,...}
 ```
 
+## Hata cevapları
+
+Tüm hatalar aynı biçimde, `application/problem+json` ([RFC 9457](https://www.rfc-editor.org/rfc/rfc9457)) olarak döner
+(`common/ApiExceptionHandler`). Her cevapta **`code`** (makine için sabit kod) ve **`instance`** (isteğin yolu) bulunur:
+
+```json
+{"type":"about:blank","title":"Bad Request","status":400,"detail":"Request body has invalid fields",
+ "instance":"/api/users","code":"VALIDATION_FAILED",
+ "errors":[{"field":"email","message":"must be a well-formed email address"},{"field":"fullName","message":"must not be blank"}]}
+```
+
+| HTTP | `code` | Ne zaman |
+|---|---|---|
+| 400 | `VALIDATION_FAILED` | Gövde ya da sorgu parametresi kurala uymuyor; `errors` alan bazında liste |
+| 400 | `MALFORMED_REQUEST` | JSON okunamıyor |
+| 400 | `INVALID_PARAMETER` | Yol/sorgu parametresinin tipi yanlış (ör. `/api/events/abc`) |
+| 404 | `NOT_FOUND` | Böyle bir adres yok |
+| 404 | `EVENT_NOT_FOUND`, `USER_NOT_FOUND`, `RESERVATION_NOT_FOUND`, `NO_ACTIVE_RESERVATION` | Kayıt yok |
+| 405 | `METHOD_NOT_ALLOWED` | Yanlış HTTP metodu; `Allow` başlığı izinli metotları söyler |
+| 409 | `EMAIL_ALREADY_REGISTERED`¹, `ALREADY_RESERVED`, `DATA_CONFLICT` | Mevcut veriyle çakışma |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | `Content-Type` desteklenmiyor |
+| 500 | `INTERNAL_ERROR` | Beklenmeyen hata — **iç ayrıntı istemciye gönderilmez**, yalnızca sunucu loguna yazılır |
+| 503 | `SERVICE_BUSY` | Kilit beklerken zaman aşımı; `Retry-After: 1` ile tekrar denenmeli |
+
+¹ Kayıt API'sindeki e-posta çakışması.
+
 ## Testler
 
 ```powershell
