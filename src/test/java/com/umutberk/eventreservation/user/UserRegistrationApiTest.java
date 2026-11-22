@@ -97,7 +97,8 @@ class UserRegistrationApiTest {
                 """)
                 .andExpect(status().isConflict())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
-                .andExpect(jsonPath("$.title").value("Email already registered"));
+                .andExpect(jsonPath("$.title").value("Email already registered"))
+                .andExpect(jsonPath("$.code").value("EMAIL_ALREADY_REGISTERED"));
 
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM app_user WHERE email = 'mehmet@example.com'", Integer.class)).isEqualTo(1);
@@ -117,7 +118,8 @@ class UserRegistrationApiTest {
                 {"email": "zeynep@example.com", "fullName": "Zeynep Demir"}
                 """)
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.title").value("Email already registered"));
+                .andExpect(jsonPath("$.title").value("Email already registered"))
+                .andExpect(jsonPath("$.code").value("EMAIL_ALREADY_REGISTERED"));
 
         verify(appUserRepository).existsByEmail("zeynep@example.com"); // on kontrol gercekten atlandi
         assertThat(jdbc.queryForObject(
