@@ -2,7 +2,7 @@
 
 Kontenjanlı etkinlik rezervasyonu ve FIFO (ilk gelen ilk alır) bekleme listesi sunan bir REST API.
 
-> Durum: **6. aşama – Kontenjanlı rezervasyon.** Aynı anda gelen istekler kapasiteyi aşamaz. Henüz bekleme listesi ve iptal yok.
+> Durum: **7. aşama – FIFO bekleme listesi, iptal ve otomatik terfi.** Aynı anda gelen istekler kapasiteyi aşamaz, sıradaki kimse atlanmaz.
 
 ## Teknolojiler
 
@@ -74,6 +74,7 @@ Flyway uygulananları `flyway_schema_history` tablosuna yazar; bir migration iki
 |---|---|
 | `V1__create_event_and_app_user.sql` | `event` ve `app_user` tabloları |
 | `V2__create_reservation.sql` | `reservation` tablosu (foreign key'ler, durum kuralı, "tek aktif rezervasyon" kuralı) |
+| `V3__add_waitlist_to_reservation.sql` | Bekleme listesi: `WAITLISTED` durumu, kalıcı `waitlist_number`, `promoted_at`, `cancelled_at` |
 
 **Kararlar**
 
@@ -89,6 +90,16 @@ Flyway uygulananları `flyway_schema_history` tablosuna yazar; bir migration iki
   **Aynı kullanıcı aynı etkinlikte yalnızca bir aktif rezervasyon** tutabilir. MySQL'de koşullu (partial) unique index olmadığı için
   hesaplanmış bir sütun kullanılır: `active_key` = aktifse `1`, değilse `NULL`; `UNIQUE (event_id, user_id, active_key)`.
   `NULL` değerler unique indekste birbiriyle çakışmadığından kural yalnızca aktif kayıtlara uygulanır; iptal edilmiş kayıtlar yeni rezervasyonu engellemez.
+- **Bekleme listesi (V3)** ayrı bir tablo değil, aynı `reservation` tablosunda `status = 'WAITLISTED'` satırlarıdır.
+  V3 ile "aktif" = `CONFIRMED` **veya** `WAITLISTED` oldu; böylece **tek** `UNIQUE (event_id, user_id, active_key)` indeksi hem
+  "aynı kullanıcı hem onaylı hem bekleyen olamaz" hem de "sıraya iki kez giremez" kuralını veritabanında korur.
+  (Ayrı bir bekleme tablosu olsaydı bu iki tablo arası kural ancak trigger ile korunabilirdi.)
+- **Sıra numarası (`waitlist_number`)**: etkinlik içinde 1, 2, 3 … diye verilen **kalıcı** numara. `UNIQUE (waitlist_number, event_id)` ile tek anlamlıdır,
+  `CHECK` ile pozitiftir ve bekleyen her kayıtta zorunludur. Terfi/iptal sonrası satırda kalır, bu yüzden bir numara asla tekrar kullanılmaz.
+  Sıradaki kişi = bekleyenler içindeki en küçük numara; **sıra konumu** = kendinden küçük numaralı bekleyen sayısı + 1 (sorguda hesaplanır).
+- **MySQL 9.7 tuzağı:** bu benzersizlik indeksi `(event_id, waitlist_number)` sırasıyla sonradan eklendiğinde MySQL onu foreign key indeksi olarak seçti ve
+  `fk_reservation_event` kontrolünü **sessizce bıraktı** (olmayan etkinliğe kayıt eklenebildi). `SchemaConstraintsTest` bunu yakaladı;
+  sütun sırası `(waitlist_number, event_id)` yapılarak çözüldü (iki sütunlu `UNIQUE`'te sıra anlamı değiştirmez).
 - **Ortak alanlar:** `id` `BIGINT AUTO_INCREMENT`, `created_at` veritabanı tarafından otomatik doldurulur.
 - **Kısıtlara isim verildi** (`chk_event_capacity_positive`, `uk_app_user_email` …), böylece hata mesajlarında hangi kuralın ihlal edildiği okunabilir.
 - **Zaman:** `DATETIME` saat dilimi bilgisi tutmaz; bu yüzden tüm zamanlar **UTC** olarak saklanır
@@ -237,21 +248,36 @@ Content-Type: application/problem+json
 
 ## Rezervasyon API'si
 
-| Metot | Adres | Başarılı cevap |
+| Metot | Adres | Ne yapar |
 |---|---|---|
-| `POST` | `/api/events/{eventId}/reservations` (gövde: `{"userId": 1}`) | `201 Created` + `Location: /api/reservations/{id}` |
-| `GET` | `/api/reservations/{id}` | `200 OK` |
+| `POST` | `/api/events/{eventId}/reservations` (gövde: `{"userId": 1}`) | Yer ayırır ya da bekleme listesine alır |
+| `GET` | `/api/reservations/{id}` | Kaydın durumu ve (bekliyorsa) sıra konumu |
+| `GET` | `/api/events/{eventId}/users/{userId}/reservation` | Kullanıcının o etkinlikteki **aktif** kaydı: durum ve sıra konumu |
+| `POST` | `/api/reservations/{id}/cancel` | Onaylı ya da bekleyen kaydı iptal eder; boşalan yeri sıradakine verir |
 
-Tüm hatalar `application/problem+json` döner. Aynı HTTP koduna sahip hataları ayırt etmek için her cevapta bir **`code`** alanı bulunur:
+### Yanıt kodları
 
-| Durum | HTTP | `code` |
-|---|---|---|
-| Etkinlik yok | `404` | `EVENT_NOT_FOUND` |
-| Kullanıcı yok | `404` | `USER_NOT_FOUND` |
-| Rezervasyon yok (GET) | `404` | `RESERVATION_NOT_FOUND` |
-| Kullanıcının bu etkinlikte zaten aktif rezervasyonu var | `409` | `ALREADY_RESERVED` |
-| Kapasite dolu | `409` | `EVENT_FULL` |
-| Gövde geçersiz (`userId` yok, ≤ 0, sayı değil, JSON bozuk) | `400` | – |
+| İstek | Durum | HTTP | `code` / gövde |
+|---|---|---|---|
+| Rezervasyon | Yer var → onaylandı | **`201 Created`** + `Location` | `status: CONFIRMED` |
+| Rezervasyon | Etkinlik dolu (ya da sırada bekleyen var) → bekleme listesine alındı | **`202 Accepted`** + `Location` | `status: WAITLISTED`, `waitlistNumber`, `waitlistPosition` |
+| Rezervasyon | Kullanıcının bu etkinlikte zaten onaylı **ya da** bekleyen kaydı var | `409` | `ALREADY_RESERVED` + `currentStatus` |
+| Rezervasyon | Etkinlik / kullanıcı yok | `404` | `EVENT_NOT_FOUND` / `USER_NOT_FOUND` |
+| Rezervasyon | Gövde geçersiz (`userId` yok, ≤ 0, sayı değil, JSON bozuk) | `400` | – |
+| İptal | İptal edildi | `200 OK` | `alreadyCancelled: false`, `promoted: [terfi eden kayıt]` (yoksa `[]`) |
+| İptal | **Tekrar iptal** (kayıt zaten iptal) | `200 OK` | `alreadyCancelled: true`, `promoted: []` — **hiçbir şey değişmez** |
+| İptal / GET | Rezervasyon yok | `404` | `RESERVATION_NOT_FOUND` |
+| Durum sorgusu | Kullanıcının bu etkinlikte onaylı/bekleyen kaydı yok | `404` | `NO_ACTIVE_RESERVATION` |
+
+`202 Accepted` seçildi çünkü istek **kabul edildi ama henüz yerine getirilmedi**: kullanıcı yer almadı, sıraya girdi.
+İstemci 201 ile 202'yi ayırarak "yer aldım" ile "bekliyorum"u gövdeyi okumadan da anlayabilir. Hatalar `application/problem+json` döner.
+
+**Tekrar iptal neden 200?** İptal **idempotent**tir: ağ hatası yüzünden tekrar gönderilen bir iptal isteği hata almamalı.
+Ama ikinci istek **kesinlikle ikinci bir terfiye yol açmaz**; `alreadyCancelled: true` ile ilk isteğin zaten iş gördüğünü söyler.
+Aynı anda gelen 10 iptalden yalnızca biri gerçekten iptal eder (bkz. testler).
+
+**Bekleyen kayıt da iptal edilebilir:** sıradan çıkar, kimse terfi etmez, arkasındakilerin konumu bir öne kayar (sıra **numaraları** değişmez).
+İptal eden kullanıcı yeniden rezervasyon yapabilir; etkinlik doluysa sıranın **sonuna** yeni bir numarayla girer.
 
 ### Tasarım kararı: aynı anda gelen istekler kapasiteyi nasıl aşamaz?
 
@@ -271,43 +297,86 @@ Bu proje ilk önce bilerek böyle yazıldı; `ReservationConcurrencyTest` kapasi
 3. Kullanıcı kontrolü, mükerrer kontrolü ve kapasite sayımı kilit altında yapılır; yer varsa kayıt eklenir.
 4. **Son savunma hattı veritabanıdır:** mükerrer rezervasyon `uk_reservation_active_user_event` kısıtına takılır ve `409 ALREADY_RESERVED`'e çevrilir.
 
-Sonuç: aynı test 5 turda da **1 × `201`, 19 × `409 EVENT_FULL`** ve veritabanında **tam 1** aktif rezervasyon.
+Sonuç: aynı test 5 turda da veritabanında **tam 1** onaylı rezervasyon. (Bekleme listesinden önce diğer 19 istek `409 EVENT_FULL` alıyordu;
+artık `202` ile sıraya giriyorlar ve sıra numaraları **1…19, boşluksuz ve tekrarsız**.)
+
+### Tasarım kararı: bekleme listesi, iptal ve terfi
+
+Oluşturma, iptal ve terfi **aynı kurala** uyar: **önce etkinlik satırı kilitlenir**, transaction **`READ COMMITTED`** çalışır.
+Böylece bir etkinlikteki bütün değişiklikler tek sırada olur ve her işlem kilitten sonra en güncel durumu görür.
+
+- **Oluşturma:** kilit → kullanıcı ve mükerrer kontrolü → **önce boş yerleri sıradakilere ver** → hâlâ yer varsa onayla (`201`),
+  yoksa `en büyük numara + 1` ile sıraya al (`202`). Bu sıralama sayesinde **sırada bekleyen biri varken boşalan yer yeni gelene verilmez.**
+- **İptal:** önce yalnızca kaydın `event_id`'si okunur (hiç değişmeyen bir değer) → etkinlik kilitlenir → kaydın **durumu kilitten sonra** okunur.
+  Zaten iptalse hiçbir şey yapılmaz. Değilse `CANCELLED` yapılır ve **aynı transaction'da** boş yer kaldıkça
+  en küçük numaralı bekleyen `CONFIRMED`'e geçirilir (`promoted_at` dolar).
+- **`SKIP LOCKED` kullanılmaz.** `SKIP LOCKED`, kilitli satırı atlayıp bir sonrakini seçer; bu da sıradakinin atlanması demektir.
+  Burada sıradaki kişi, etkinlik kilidi altında sıralı bir sorguyla (`ORDER BY waitlist_number LIMIT 1`) seçilir.
+
+**Testlerin gerçekten koruduğunu kanıtlamak için** servise bilerek hata eklenip eşzamanlılık testi çalıştırıldı (sonra geri alındı):
+
+| Bilerek eklenen hata | Sonuç |
+|---|---|
+| İptalde kaydın durumunu **kilitten önce** okumak | Aynı anda 10 iptalin birden fazlası "iptal ettim" dedi → test yakaladı |
+| İptalde terfi etmemek | Boşalan yer bekleyene verilmedi → test yakaladı |
+| İptali `REPEATABLE READ` ile çalıştırmak | Eski "fotoğraf" yüzünden aynı belirti → test yakaladı |
 
 **Neden bu yol?** Değerlendirilen seçenekler:
 
 | Yaklaşım | Artı | Eksi |
 |---|---|---|
-| **Etkinlik satırını kilitlemek (seçilen)** | Rezervasyon tablosu tek doğruluk kaynağı; kod kısa ve okunur; iptal/bekleme listesi aynı kilit altında eklenebilir | Aynı etkinliğe gelen istekler sıraya girer (çok yoğun tek etkinlikte darboğaz olabilir) |
+| **Etkinlik satırını kilitlemek (seçilen)** | Rezervasyon tablosu tek doğruluk kaynağı; kod kısa ve okunur; iptal/bekleme listesi aynı kilit altında çalışır | Aynı etkinliğe gelen istekler sıraya girer (çok yoğun tek etkinlikte darboğaz olabilir) |
 | `event` tablosuna sayaç + atomik `UPDATE ... SET reserved = reserved + 1 WHERE reserved < capacity` | Tek SQL ile çok hızlı | Sayaç ile rezervasyon tablosu senkron tutulmalı (ek migration, iptalde azaltma, tutarsızlık riski) |
 | Optimistic locking (`@Version`) | Kilit beklemez | Yoğun yarışta isteklerin çoğu çakışıp tekrar denenmeli; kapasite 1 gibi "sıcak" durumda verimsiz |
 | `SERIALIZABLE` izolasyon | Kod değişmez | MySQL'de geniş kilitler ve deadlock'lar; tüm sorguları yavaşlatır |
 
 ### Örnek istekler (PowerShell)
 
+Kapasitesi **1** olan etkinlik 1; Ayşe (1), Mehmet (2), Zeynep (3) sırayla rezervasyon yapar (çıktılar gerçek çalıştırmadan kısaltıldı):
+
 ```powershell
-# Kullanıcı 1, etkinlik 1'de yer ayırır
-curl.exe -i -X POST http://localhost:8080/api/events/1/reservations `
-  -H "Content-Type: application/json" -d '{\"userId\": 1}'
+curl.exe -i -X POST http://localhost:8080/api/events/1/reservations -H "Content-Type: application/json" -d '{\"userId\": 1}'
 ```
 
 ```http
-HTTP/1.1 201
+HTTP/1.1 201                                   # Ayşe: yer aldı
 Location: http://localhost:8080/api/reservations/1
-Content-Type: application/json
+{"id":1,"eventId":1,"userId":1,"status":"CONFIRMED","waitlistNumber":null,"waitlistPosition":null,...}
 
-{"id":1,"eventId":1,"userId":1,"status":"CONFIRMED","createdAt":"2026-11-22T20:20:35.838763Z"}
-```
+HTTP/1.1 202                                   # Mehmet: sıraya girdi
+Location: http://localhost:8080/api/reservations/2
+{"id":2,"eventId":1,"userId":2,"status":"WAITLISTED","waitlistNumber":1,"waitlistPosition":1,...}
 
-Aynı istek tekrar gönderilirse ya da kapasite doluysa:
+HTTP/1.1 202                                   # Zeynep: sıraya girdi
+{"id":3,"eventId":1,"userId":3,"status":"WAITLISTED","waitlistNumber":2,"waitlistPosition":2,...}
 
-```json
-{"detail":"User 1 already has an active reservation for event 1","status":409,"title":"Already reserved","code":"ALREADY_RESERVED"}
-{"detail":"Event 1 has no free places left","status":409,"title":"Event is full","code":"EVENT_FULL"}
+HTTP/1.1 409                                   # Zeynep tekrar denerse
+{"detail":"User 3 is already on the waitlist for event 1","status":409,"title":"Already reserved","code":"ALREADY_RESERVED","currentStatus":"WAITLISTED"}
 ```
 
 ```powershell
-# Rezervasyon detayı (Location adresi)
-curl.exe http://localhost:8080/api/reservations/1
+# Zeynep durumunu sorgular
+curl.exe http://localhost:8080/api/events/1/users/3/reservation
+# -> {"id":3,...,"status":"WAITLISTED","waitlistNumber":2,"waitlistPosition":2,...}
+
+# Ayşe iptal eder -> Mehmet AYNI istekte onaylanır
+curl.exe -X POST http://localhost:8080/api/reservations/1/cancel
+```
+
+```json
+{"reservation":{"id":1,"status":"CANCELLED","cancelledAt":"2026-11-22T20:39:32.466940Z",...},
+ "alreadyCancelled":false,
+ "promoted":[{"id":2,"userId":2,"status":"CONFIRMED","waitlistNumber":1,"promotedAt":"2026-11-22T20:39:32.484429Z",...}]}
+```
+
+```powershell
+# Ayşe aynı iptali tekrar gönderir -> 200, hiçbir şey değişmez
+curl.exe -X POST http://localhost:8080/api/reservations/1/cancel
+# -> {"reservation":{"id":1,"status":"CANCELLED",...},"alreadyCancelled":true,"promoted":[]}
+
+# Zeynep artık sıradaki: numarası 2, konumu 1
+curl.exe http://localhost:8080/api/events/1/users/3/reservation
+# -> {"id":3,...,"status":"WAITLISTED","waitlistNumber":2,"waitlistPosition":1,...}
 ```
 
 ## Testler
@@ -319,17 +388,24 @@ curl.exe http://localhost:8080/api/reservations/1
 - `HealthControllerTest` veritabanı olmadan her zaman çalışır.
 - Diğer testler gerçek MySQL'e, `test` profiliyle **ayrı test veritabanına** (`DB_TEST_URL`) bağlanır; geliştirme verisine dokunmaz.
   `DB_PASSWORD` tanımlı değilse **atlanır** (Skipped).
-  - `FlywayMigrationTest`: test veritabanını boşaltır, uygulamayı iki kez başlatır; ilk açılışta V1'in uygulandığını ve tabloların oluştuğunu, ikinci açılışta tekrar uygulanmadığını doğrular.
+  - `FlywayMigrationTest`: test veritabanını boşaltır, uygulamayı iki kez başlatır; ilk açılışta V1–V3'ün uygulandığını ve tabloların beklenen sütunlarla oluştuğunu, ikinci açılışta tekrar uygulanmadığını doğrular.
   - `SchemaConstraintsTest`: pozitif kapasite, boş olmayan ad ve benzersiz e-posta kurallarını dener (değişiklikler geri alınır).
   - `EventApiTest`: HTTP üzerinden oluşturma (201 + `Location`, UTC saklama), sıralı listeleme, detay, olmayan ID için 404 ve
     geçersiz istek için 400 davranışını dener (değişiklikler geri alınır).
   - `UserRegistrationApiTest`: geçerli kayıt (201 + `Location`, boşluk kırpma, küçük harf), 8 farklı boş/geçersiz alan (400, hiçbir şey yazılmaz),
     farklı harfle ikinci kayıt (409) ve Java ön kontrolü bilerek atlandığında **veritabanı kısıtının** da 409 ürettiğini dener; ayrıca `GET /api/users/{id}` (200 / 404) (değişiklikler geri alınır).
-  - `ReservationApiTest`: 201 + çalışan `Location`, olmayan etkinlik/kullanıcı (404), mükerrer (409 `ALREADY_RESERVED`), dolu (409 `EVENT_FULL`),
-    iptal edilmiş kaydın kapasite kullanmaması, 6 farklı geçersiz gövde (400) ve Java kontrolü atlandığında veritabanı kısıtının 409 üretmesi.
-  - `ReservationConcurrencyTest`: **gerçek HTTP sunucusu** ile kapasitesi 1 olan etkinliğe 20 eşzamanlı istek (5 tur) → tam 1 başarılı rezervasyon;
-    aynı kullanıcıdan 10 eşzamanlı istek → tam 1. Bu test transaction'lı olmadığı için yalnızca **kendi oluşturduğu** kayıtları test veritabanından siler.
-  - `SchemaConstraintsTest` V2 kurallarını da dener: foreign key'ler, tek aktif rezervasyon, iptal edilmiş kayıtların engellememesi, geçersiz durum.
+  - `ReservationApiTest` (tek tek istekler, geri alınır): 201 + `Location`, 404'ler, 400'ler; **FIFO** sıraya giriş (202, numara ve konum),
+    onaylı kullanıcının sıraya girememesi, sıraya iki kez girilememesi, durum sorgusu, **iptal + aynı istekte terfi**, bekleyenin iptali,
+    **tekrar iptal** (200, ikinci terfi yok), **son bekleyenin terfisiyle sıranın boşalması** ve ardından yeni gelenin doğrudan onaylanması,
+    **bekleyen varken boş yerin yeni gelene verilmemesi**, iptal sonrası yeniden katılımın sıranın sonuna gitmesi, veritabanı kısıtının son savunma hattı olması.
+  - `ReservationConcurrencyTest` (**gerçek HTTP sunucusu**, eşzamanlı): kapasite 1'e 20 istek (5 tur) → 1 onay + sıra 1…19;
+    aynı kullanıcıdan 10 istek (boş ve dolu etkinlikte) → tek kayıt; **3 iptal + 5 yeni istek aynı anda** (3 tur) → terfi edenler tam olarak sıradaki ilk 3 kişi,
+    yeni gelenler sonda; **aynı iptal 10 kez aynı anda** → tek gerçek iptal, tek terfi.
+    Bu test transaction'lı olmadığı için yalnızca **kendi oluşturduğu** kayıtları test veritabanından siler.
+  - **Her senaryonun sonunda** (`WaitlistInvariants`) veritabanında doğrulanır: onaylı ≤ kapasite; bekleyen varken boş yer yok;
+    terfi edenlerin numarası hâlâ bekleyenlerin hepsinden küçük (**kimse atlanmadı**); bekleyen numaraları tekrarsız ve sıralı.
+  - `SchemaConstraintsTest` V2/V3 kurallarını da dener: foreign key'ler, tek aktif kayıt (onaylı + bekleyen birlikte olamaz, sıraya iki kez girilemez),
+    sıra numarasının etkinlik içinde tekilliği, pozitifliği ve bekleyende zorunluluğu, iptal edilmiş kayıtların engellememesi.
 
 ## Yol haritası
 
@@ -339,5 +415,6 @@ curl.exe http://localhost:8080/api/reservations/1
 4. [x] Etkinlik API'si (oluşturma, listeleme, detay)
 5. [x] Kullanıcı kaydı API'si (kayıt + detay)
 6. [x] Kontenjanlı rezervasyon ve eşzamanlılık testi
-7. [ ] Rezervasyon iptali
-8. [ ] FIFO bekleme listesi ve iptalde otomatik terfi
+7. [x] Rezervasyon iptali
+8. [x] FIFO bekleme listesi ve iptalde otomatik terfi
+9. [ ] Kimlik doğrulama (şu an kimin iptal edebileceği kısıtlı değil)
