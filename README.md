@@ -2,13 +2,14 @@
 
 Kontenjanlı etkinlik rezervasyonu ve FIFO (ilk gelen ilk alır) bekleme listesi sunan bir REST API.
 
-> Durum: **2. aşama – MySQL bağlantısı.** Henüz Event modeli ve iş kuralları yok.
+> Durum: **3. aşama – Flyway ve ilk veritabanı şeması.** Henüz API ve rezervasyon kuralları yok.
 
 ## Teknolojiler
 
 - Java 21 (JDK 21 veya üstüyle derlenir)
 - Spring Boot 4.2 (Spring Web MVC, Spring Data JPA)
 - MySQL 8+ (MySQL Connector/J)
+- Flyway (sürümlü veritabanı migration'ları)
 - Maven Wrapper (Maven kurmak gerekmez)
 
 ## Veritabanı
@@ -21,6 +22,7 @@ Bağlantı bilgileri ortam değişkenlerinden okunur; şifre hiçbir dosyaya yaz
 | `DB_URL` | `jdbc:mysql://localhost:3306/reservation_platform` | JDBC adresi |
 | `DB_USERNAME` | `reservation_app` | Uygulama kullanıcısı |
 | `DB_PASSWORD` | – (**zorunlu**) | Uygulama kullanıcısının şifresi |
+| `DB_TEST_URL` | `jdbc:mysql://localhost:3306/reservation_platform_test` | Testlerin kullandığı ayrı veritabanı |
 
 ### Projeye özel yerel MySQL (önerilen, Windows)
 
@@ -43,7 +45,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\dev-mysql.ps1 stop
 `init`:
 - Rastgele şifreler üretir ve yalnızca Windows **kullanıcı ortam değişkenlerine** kaydeder
   (`DB_PASSWORD`, `RESERVATION_MYSQL_ROOT_PASSWORD`); şifreler ekrana veya log'a yazılmaz.
-- `DB_URL` değişkenini `jdbc:mysql://localhost:3307/reservation_platform` olarak ayarlar.
+- `reservation_platform` (geliştirme) ve `reservation_platform_test` (testler) veritabanlarını oluşturur.
+- `DB_URL` ve `DB_TEST_URL` değişkenlerini port 3307'yi gösterecek şekilde ayarlar.
+- Tekrar çalıştırılabilir: mevcut kurulumda eksik veritabanlarını ve yetkileri tamamlar.
 - Veriler: `%USERPROFILE%\dev\local-mysql\reservation-platform\` (repo dışında).
 
 > `init` sonrası **terminali / IntelliJ'i kapatıp yeniden aç**: yeni ortam değişkenlerini yalnızca yeni açılan programlar görür.
@@ -54,9 +58,34 @@ Root ile bağlanıp şunu çalıştır, sonra `DB_PASSWORD` (ve gerekirse `DB_UR
 
 ```sql
 CREATE DATABASE reservation_platform CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE DATABASE reservation_platform_test CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 CREATE USER 'reservation_app'@'localhost' IDENTIFIED BY '<sifre>';
 GRANT ALL PRIVILEGES ON reservation_platform.* TO 'reservation_app'@'localhost';
+GRANT ALL PRIVILEGES ON reservation_platform_test.* TO 'reservation_app'@'localhost';
 ```
+
+## Veritabanı şeması
+
+Tabloları **yalnızca Flyway** oluşturur; Hibernate'in tablo oluşturması kapalıdır (`spring.jpa.hibernate.ddl-auto=none`).
+Migration dosyaları `src/main/resources/db/migration/` altındadır ve uygulama her açıldığında otomatik çalışır.
+Flyway uygulananları `flyway_schema_history` tablosuna yazar; bir migration ikinci kez uygulanmaz.
+
+| Migration | İçerik |
+|---|---|
+| `V1__create_event_and_app_user.sql` | `event` ve `app_user` tabloları |
+
+**Kararlar**
+
+- **Uygulanmış migration değiştirilmez.** Şema değişiklikleri yeni dosyayla yapılır (`V2__...`, `V3__...`). Eski dosya değişirse Flyway checksum uyuşmazlığı verip açılışı durdurur.
+- **`event`**: `name` (en fazla 200 karakter, boş olamaz), `starts_at` (tarih + saat, `DATETIME(6)`), `capacity`.
+  Kapasite `CHECK (capacity > 0)` ile **veritabanında** da korunur; uygulamadaki bir hata bile 0 ya da negatif kapasiteli etkinlik yazamaz.
+  Yaklaşan etkinlikleri listelemek için `starts_at` üzerinde indeks var.
+- **`app_user`**: `email` (kimlik/giriş anahtarı, **benzersiz**), `full_name`. Tablonun adı `user` değil, çünkü `USER` MySQL'de ve birçok veritabanında anahtar kelime.
+  Karşılaştırma ayarı (`utf8mb4_0900_ai_ci`) büyük/küçük harf duyarsız olduğu için `Ayse@x.com` ile `ayse@x.com` aynı kabul edilir.
+  Şifre/kimlik doğrulama alanları bu aşamada **yok**; gerektiğinde ayrı bir migration ile eklenecek.
+- **Ortak alanlar:** `id` `BIGINT AUTO_INCREMENT`, `created_at` veritabanı tarafından otomatik doldurulur.
+- **Kısıtlara isim verildi** (`chk_event_capacity_positive`, `uk_app_user_email` …), böylece hata mesajlarında hangi kuralın ihlal edildiği okunabilir.
+- **Zaman:** `DATETIME` saat dilimi bilgisi tutmaz; tarihlerin UTC olarak saklanması planlanıyor (API aşamasında uygulama tarafında ayarlanacak).
 
 ## Çalıştırma (Windows)
 
@@ -77,13 +106,17 @@ Ardından tarayıcıda: <http://localhost:8080/api/health>
 ```
 
 - `HealthControllerTest` veritabanı olmadan her zaman çalışır.
-- `EventReservationApplicationTests` ve `MySqlConnectionTest` gerçek MySQL'e bağlanır; `DB_PASSWORD` tanımlı değilse **atlanır** (Skipped).
+- Diğer testler gerçek MySQL'e, `test` profiliyle **ayrı test veritabanına** (`DB_TEST_URL`) bağlanır; geliştirme verisine dokunmaz.
+  `DB_PASSWORD` tanımlı değilse **atlanır** (Skipped).
+  - `FlywayMigrationTest`: test veritabanını boşaltır, uygulamayı iki kez başlatır; ilk açılışta V1'in uygulandığını ve tabloların oluştuğunu, ikinci açılışta tekrar uygulanmadığını doğrular.
+  - `SchemaConstraintsTest`: pozitif kapasite, boş olmayan ad ve benzersiz e-posta kurallarını dener (değişiklikler geri alınır).
 
 ## Yol haritası
 
 1. [x] Spring Web iskeleti
 2. [x] MySQL bağlantısı
-3. [ ] JPA ile Etkinlik (Event) modeli
-4. [ ] Kontenjanlı rezervasyon
-5. [ ] FIFO bekleme listesi ve otomatik terfi
-6. [ ] Eşzamanlılık (aynı anda gelen istekler) testleri
+3. [x] Flyway ve ilk şema (`event`, `app_user`)
+4. [ ] JPA entity'leri ve Etkinlik API'si
+5. [ ] Kontenjanlı rezervasyon
+6. [ ] FIFO bekleme listesi ve otomatik terfi
+7. [ ] Eşzamanlılık (aynı anda gelen istekler) testleri

@@ -4,7 +4,7 @@
 # No administrator rights are needed.
 #
 # Usage (from the project root):
-#   powershell -ExecutionPolicy Bypass -File .\scripts\dev-mysql.ps1 init     # first time: create + start
+#   powershell -ExecutionPolicy Bypass -File .\scripts\dev-mysql.ps1 init     # create + start (re-run safe)
 #   powershell -ExecutionPolicy Bypass -File .\scripts\dev-mysql.ps1 start    # e.g. after a reboot
 #   powershell -ExecutionPolicy Bypass -File .\scripts\dev-mysql.ps1 stop
 #   powershell -ExecutionPolicy Bypass -File .\scripts\dev-mysql.ps1 status
@@ -24,11 +24,13 @@ $MysqlBin = if ($env:MYSQL_BIN) { $env:MYSQL_BIN } else { 'C:\Program Files\MySQ
 $Base     = if ($env:RESERVATION_MYSQL_HOME) { $env:RESERVATION_MYSQL_HOME } else { Join-Path $env:USERPROFILE 'dev\local-mysql\reservation-platform' }
 $Port     = 3307
 $DbName   = 'reservation_platform'
+$TestDb   = 'reservation_platform_test'
 $DbUser   = 'reservation_app'
 $DataDir  = Join-Path $Base 'data'
 $IniFile  = Join-Path $Base 'my.ini'
 $LogFile  = Join-Path $Base 'mysqld.log'
 $DbUrl    = "jdbc:mysql://localhost:$Port/$DbName"
+$TestUrl  = "jdbc:mysql://localhost:$Port/$TestDb"
 
 function Get-Secret([string]$Name) {
     $v = [Environment]::GetEnvironmentVariable($Name, 'Process')
@@ -97,17 +99,33 @@ function Start-Server {
     throw "Project MySQL did not start in 30 seconds. See $LogFile"
 }
 
+# Creates the app and test databases (if missing) and grants the app user access.
+# Safe to run on an existing installation.
+function Initialize-Databases {
+    $sql = @"
+CREATE DATABASE IF NOT EXISTS $DbName CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE DATABASE IF NOT EXISTS $TestDb CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+GRANT ALL PRIVILEGES ON $DbName.* TO '$DbUser'@'localhost';
+GRANT ALL PRIVILEGES ON $TestDb.* TO '$DbUser'@'localhost';
+"@
+    Invoke-RootClient 'mysql.exe' @() $sql
+    [Environment]::SetEnvironmentVariable('DB_URL', $DbUrl, 'User')
+    [Environment]::SetEnvironmentVariable('DB_TEST_URL', $TestUrl, 'User')
+    Write-Host "Databases '$DbName' and '$TestDb' are ready for '$DbUser'@'localhost'."
+    Write-Host "DB_URL=$DbUrl"
+    Write-Host "DB_TEST_URL=$TestUrl"
+}
+
 function Initialize-Server {
     if (Test-Path (Join-Path $DataDir 'mysql')) {
         Write-Host "Project MySQL already initialized at $DataDir"
         Start-Server
+        Initialize-Databases
         return
     }
 
     $rootPwd = Initialize-Secret 'RESERVATION_MYSQL_ROOT_PASSWORD'
     $appPwd  = Initialize-Secret 'DB_PASSWORD'
-    [Environment]::SetEnvironmentVariable('DB_URL', $DbUrl, 'User')
-    Write-Host "DB_URL set to $DbUrl"
 
     New-Item -ItemType Directory -Force -Path $Base | Out-Null
     $fwd = { param($p) $p.Replace('\', '/') }
@@ -127,9 +145,7 @@ collation-server=utf8mb4_0900_ai_ci
     # Executed once while the data folder is created, so root never runs without a password.
     $initSql = @"
 ALTER USER 'root'@'localhost' IDENTIFIED BY '$(ConvertTo-SqlLiteral $rootPwd)';
-CREATE DATABASE $DbName CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 CREATE USER '$DbUser'@'localhost' IDENTIFIED BY '$(ConvertTo-SqlLiteral $appPwd)';
-GRANT ALL PRIVILEGES ON $DbName.* TO '$DbUser'@'localhost';
 "@
     $initFile = [IO.Path]::GetTempFileName()
     try {
@@ -143,8 +159,8 @@ GRANT ALL PRIVILEGES ON $DbName.* TO '$DbUser'@'localhost';
     }
 
     Start-Server
-    Write-Host "Database '$DbName' and user '$DbUser'@'localhost' are ready."
-    Write-Host 'Open a NEW terminal / restart IntelliJ so it sees DB_URL and DB_PASSWORD.'
+    Initialize-Databases
+    Write-Host 'Open a NEW terminal / restart your IDE so it sees DB_URL, DB_TEST_URL and DB_PASSWORD.'
 }
 
 function Stop-Server {
@@ -162,7 +178,7 @@ function Show-Status {
     Write-Host "Port        : $Port"
     if (Test-ServerRunning) {
         Write-Host 'Running     : yes'
-        Invoke-RootClient 'mysql.exe' @('--table') "SELECT VERSION() AS version, @@port AS port, @@datadir AS datadir; SELECT user, host FROM mysql.user WHERE user = '$DbUser'; SHOW DATABASES LIKE '$DbName';"
+        Invoke-RootClient 'mysql.exe' @('--table') "SELECT VERSION() AS version, @@port AS port, @@datadir AS datadir; SELECT user, host FROM mysql.user WHERE user = '$DbUser'; SHOW DATABASES LIKE '$DbName%';"
     }
     else {
         Write-Host 'Running     : no'
