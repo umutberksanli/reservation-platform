@@ -9,7 +9,6 @@ import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -29,7 +28,6 @@ import com.jayway.jsonpath.JsonPath;
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@EnabledIfEnvironmentVariable(named = "DB_PASSWORD", matches = ".+")
 class OpenApiDocsTest {
 
     @Autowired

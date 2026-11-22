@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test (MySQL via Testcontainers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # DB_TEST_URL bilerek tanimli degil: testler Testcontainers ile gecici bir MySQL 8.4 baslatir.
+      # Boylece testlerin yerel kuruluma bagli olmadigi her calistirmada kanitlanir.
+      - name: Build and run all tests
+        run: ./mvnw -B -ntp verify
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          retention-days: 7

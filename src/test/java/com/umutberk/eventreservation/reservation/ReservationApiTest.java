@@ -22,7 +22,6 @@ import java.util.UUID;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -48,7 +47,6 @@ import com.jayway.jsonpath.JsonPath;
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Transactional
-@EnabledIfEnvironmentVariable(named = "DB_PASSWORD", matches = ".+")
 class ReservationApiTest {
 
     @Autowired

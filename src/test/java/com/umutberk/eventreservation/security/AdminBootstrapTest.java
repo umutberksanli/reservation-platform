@@ -7,7 +7,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -28,7 +27,6 @@ import com.jayway.jsonpath.JsonPath;
         "app.bootstrap-admin.password=test-only-admin-password"})
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@EnabledIfEnvironmentVariable(named = "DB_PASSWORD", matches = ".+")
 class AdminBootstrapTest {
 
     @Autowired

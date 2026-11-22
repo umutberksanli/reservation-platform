@@ -3,7 +3,6 @@ package com.umutberk.eventreservation;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -11,11 +10,10 @@ import org.springframework.test.context.ActiveProfiles;
 
 /**
  * Gercek MySQL'e baglanip dogru (test) veritabanina, dogru kullaniciyla
- * baglandigimizi kontrol eder. DB_PASSWORD tanimli degilse atlanir.
+ * baglandigimizi kontrol eder (DB_TEST_URL ya da Testcontainers).
  */
 @SpringBootTest
 @ActiveProfiles("test")
-@EnabledIfEnvironmentVariable(named = "DB_PASSWORD", matches = ".+")
 class MySqlConnectionTest {
 
     @Autowired
@@ -28,7 +26,8 @@ class MySqlConnectionTest {
         Integer one = jdbcTemplate.queryForObject("SELECT 1", Integer.class);
 
         assertThat(database).isEqualTo("reservation_platform_test");
-        assertThat(user).isEqualTo("reservation_app@localhost");
+        // Yerel MySQL'de "reservation_app@localhost", konteynerde "reservation_app@%"
+        assertThat(user).startsWith("reservation_app@");
         assertThat(one).isEqualTo(1);
     }
 }
