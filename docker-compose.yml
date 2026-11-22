@@ -1,0 +1,45 @@
+# Uygulama + MySQL 8.4. Kullanim:
+#   cp .env.example .env    (degerleri doldurun; .env Git'e girmez)
+#   docker compose up -d --build
+#   http://localhost:8080/swagger-ui.html
+# Durdurmak: docker compose down      Verileri de silmek: docker compose down -v
+name: reservation-platform
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: reservation_platform
+      MYSQL_USER: reservation_app
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set in .env}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    # Port disari acilmaz; yalnizca "app" servisi Compose agi uzerinden baglanir.
+    healthcheck:
+      # Sifre gerektirmez: sunucu cevap veriyorsa (giris reddedilse bile) "ayakta" sayilir.
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  app:
+    build: .
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:mysql://mysql:3306/reservation_platform
+      DB_USERNAME: reservation_app
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET (at least 32 characters) must be set in .env}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    ports:
+      # Yalnizca bu bilgisayardan erisilir.
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+
+volumes:
+  mysql-data:

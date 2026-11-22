@@ -61,4 +61,6 @@ build/
 
 ### Local secrets ###
 .env
+.env.*
+!.env.example
 application-local.properties
