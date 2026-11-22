@@ -6,10 +6,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.umutberk.eventreservation.common.PageResponse;
 import com.umutberk.eventreservation.event.Event;
 import com.umutberk.eventreservation.event.EventNotFoundException;
 import com.umutberk.eventreservation.event.EventRepository;
@@ -18,6 +21,7 @@ import com.umutberk.eventreservation.reservation.ReservationProblems.NoActiveRes
 import com.umutberk.eventreservation.reservation.ReservationProblems.ReservationNotFoundException;
 import com.umutberk.eventreservation.reservation.dto.CancellationResponse;
 import com.umutberk.eventreservation.reservation.dto.ReservationResponse;
+import com.umutberk.eventreservation.reservation.dto.UserReservationResponse;
 import com.umutberk.eventreservation.user.AppUser;
 import com.umutberk.eventreservation.user.AppUserRepository;
 import com.umutberk.eventreservation.user.UserNotFoundException;
@@ -135,6 +139,18 @@ public class ReservationService {
                 .orElseThrow(() -> new NoActiveReservationException(eventId, userId));
     }
 
+    /** Kullanicinin kayitlari, en yeni once. status null ise hepsi. */
+    @Transactional(readOnly = true, isolation = Isolation.READ_COMMITTED)
+    public PageResponse<UserReservationResponse> listForUser(long userId, ReservationStatus status, int page, int size) {
+        if (!appUserRepository.existsById(userId)) {
+            throw new UserNotFoundException(userId);
+        }
+        PageRequest pageRequest = PageRequest.of(page, size,
+                Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
+        return PageResponse.of(reservationRepository.findForUser(userId, status, pageRequest),
+                r -> UserReservationResponse.from(r, waitlistPosition(r)));
+    }
+
     // ------------------------------------------------------------------ yardimcilar
 
     private Event lockEvent(long eventId) {
@@ -174,12 +190,16 @@ public class ReservationService {
     }
 
     private ReservationResponse toResponse(Reservation reservation) {
-        Integer position = null;
-        if (reservation.getStatus() == ReservationStatus.WAITLISTED) {
-            position = (int) reservationRepository.countAhead(reservation.getEvent().getId(),
-                    ReservationStatus.WAITLISTED, reservation.getWaitlistNumber()) + 1;
+        return ReservationResponse.from(reservation, waitlistPosition(reservation));
+    }
+
+    /** Bekleyen icin sira konumu (1 = siradaki); digerleri icin null. */
+    private Integer waitlistPosition(Reservation reservation) {
+        if (reservation.getStatus() != ReservationStatus.WAITLISTED) {
+            return null;
         }
-        return ReservationResponse.from(reservation, position);
+        return (int) reservationRepository.countAhead(reservation.getEvent().getId(),
+                ReservationStatus.WAITLISTED, reservation.getWaitlistNumber()) + 1;
     }
 
     private static boolean isActiveReservationViolation(DataIntegrityViolationException ex) {

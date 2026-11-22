@@ -3,6 +3,8 @@ package com.umutberk.eventreservation.reservation;
 import java.util.Collection;
 import java.util.Optional;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -27,6 +29,17 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
     /** Bu sira numarasindan once bekleyen kisi sayisi; konum = bu sayi + 1. */
     @Query("select count(r) from Reservation r where r.event.id = :eventId and r.status = :status and r.waitlistNumber < :number")
     long countAhead(@Param("eventId") Long eventId, @Param("status") ReservationStatus status, @Param("number") int number);
+
+    /**
+     * Kullanicinin kayitlari, etkinlik bilgisiyle birlikte (join fetch: satir basina ek sorgu yok).
+     * status null ise tum durumlar. Siralama Pageable'dan gelir.
+     */
+    @Query(value = "select r from Reservation r join fetch r.event "
+            + "where r.user.id = :userId and (:status is null or r.status = :status)",
+            countQuery = "select count(r) from Reservation r "
+            + "where r.user.id = :userId and (:status is null or r.status = :status)")
+    Page<Reservation> findForUser(@Param("userId") Long userId, @Param("status") ReservationStatus status,
+            Pageable pageable);
 
     /** Iptalde hangi etkinligin kilitlenecegini bulmak icin; entity yuklemez (event_id hic degismez). */
     @Query("select r.event.id from Reservation r where r.id = :id")
