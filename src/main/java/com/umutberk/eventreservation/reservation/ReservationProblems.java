@@ -13,23 +13,25 @@ public final class ReservationProblems {
     private ReservationProblems() {
     }
 
-    /** Etkinligin kapasitesi dolu -> 409 EVENT_FULL */
-    public static class EventFullException extends ErrorResponseException {
-        public EventFullException(long eventId) {
-            super(HttpStatus.CONFLICT,
-                    problem(HttpStatus.CONFLICT, "Event is full", "EVENT_FULL",
-                            "Event " + eventId + " has no free places left"),
-                    null);
-        }
-    }
-
-    /** Kullanicinin bu etkinlikte zaten aktif rezervasyonu var -> 409 ALREADY_RESERVED */
+    /**
+     * Kullanicinin bu etkinlikte zaten aktif (onayli ya da bekleyen) kaydi var -> 409 ALREADY_RESERVED.
+     * Biliniyorsa mevcut durum "currentStatus" alaninda doner.
+     */
     public static class AlreadyReservedException extends ErrorResponseException {
-        public AlreadyReservedException(long eventId, long userId, Throwable cause) {
-            super(HttpStatus.CONFLICT,
-                    problem(HttpStatus.CONFLICT, "Already reserved", "ALREADY_RESERVED",
-                            "User " + userId + " already has an active reservation for event " + eventId),
-                    cause);
+        public AlreadyReservedException(long eventId, long userId, ReservationStatus currentStatus, Throwable cause) {
+            super(HttpStatus.CONFLICT, problem(eventId, userId, currentStatus), cause);
+        }
+
+        private static ProblemDetail problem(long eventId, long userId, ReservationStatus currentStatus) {
+            String what = currentStatus == ReservationStatus.WAITLISTED ? "is already on the waitlist"
+                    : currentStatus == ReservationStatus.CONFIRMED ? "already has a confirmed reservation"
+                    : "already has an active reservation or waitlist entry";
+            ProblemDetail problem = ReservationProblems.problem(HttpStatus.CONFLICT, "Already reserved",
+                    "ALREADY_RESERVED", "User " + userId + " " + what + " for event " + eventId);
+            if (currentStatus != null) {
+                problem.setProperty("currentStatus", currentStatus.name());
+            }
+            return problem;
         }
     }
 
@@ -43,7 +45,17 @@ public final class ReservationProblems {
         }
     }
 
-    private static ProblemDetail problem(HttpStatus status, String title, String code, String detail) {
+    /** Kullanicinin bu etkinlikte onayli ya da bekleyen kaydi yok -> 404 NO_ACTIVE_RESERVATION */
+    public static class NoActiveReservationException extends ErrorResponseException {
+        public NoActiveReservationException(long eventId, long userId) {
+            super(HttpStatus.NOT_FOUND,
+                    problem(HttpStatus.NOT_FOUND, "No active reservation", "NO_ACTIVE_RESERVATION",
+                            "User " + userId + " has no confirmed or waitlisted reservation for event " + eventId),
+                    null);
+        }
+    }
+
+    static ProblemDetail problem(HttpStatus status, String title, String code, String detail) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, detail);
         problem.setTitle(title);
         problem.setProperty("code", code);

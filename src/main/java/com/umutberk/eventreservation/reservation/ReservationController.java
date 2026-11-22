@@ -2,6 +2,7 @@ package com.umutberk.eventreservation.reservation;
 
 import java.net.URI;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -11,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
+import com.umutberk.eventreservation.reservation.dto.CancellationResponse;
 import com.umutberk.eventreservation.reservation.dto.CreateReservationRequest;
 import com.umutberk.eventreservation.reservation.dto.ReservationResponse;
 
@@ -27,8 +29,10 @@ public class ReservationController {
     }
 
     /**
-     * 201 Created + Location: /api/reservations/{id}
-     * 404 EVENT_NOT_FOUND / USER_NOT_FOUND, 409 ALREADY_RESERVED / EVENT_FULL, 400 gecersiz govde.
+     * 201 Created  -> yer ayrildi (CONFIRMED)
+     * 202 Accepted -> etkinlik dolu, bekleme listesine alindi (WAITLISTED, waitlistPosition dolu)
+     * Ikisinde de Location: /api/reservations/{id}
+     * 404 EVENT_NOT_FOUND / USER_NOT_FOUND, 409 ALREADY_RESERVED, 400 gecersiz govde.
      */
     @PostMapping("/events/{eventId}/reservations")
     public ResponseEntity<ReservationResponse> create(@PathVariable long eventId,
@@ -38,11 +42,28 @@ public class ReservationController {
                 .path("/api/reservations/{id}")
                 .buildAndExpand(created.id())
                 .toUri();
-        return ResponseEntity.created(location).body(created);
+        HttpStatus status = created.status() == ReservationStatus.CONFIRMED ? HttpStatus.CREATED : HttpStatus.ACCEPTED;
+        return ResponseEntity.status(status).location(location).body(created);
     }
 
+    /** Durum ve (bekliyorsa) sira konumu. 404 RESERVATION_NOT_FOUND */
     @GetMapping("/reservations/{id}")
     public ReservationResponse get(@PathVariable long id) {
         return reservationService.findById(id);
+    }
+
+    /** Kullanicinin bu etkinlikteki aktif kaydi. 404 EVENT_NOT_FOUND / USER_NOT_FOUND / NO_ACTIVE_RESERVATION */
+    @GetMapping("/events/{eventId}/users/{userId}/reservation")
+    public ReservationResponse getActiveForUser(@PathVariable long eventId, @PathVariable long userId) {
+        return reservationService.findActive(eventId, userId);
+    }
+
+    /**
+     * Iptal. 200 OK; onayli bir yer bosaldiysa "promoted" listesinde terfi eden kayit doner.
+     * Tekrar iptal: yine 200, alreadyCancelled = true, hicbir sey degismez. 404 RESERVATION_NOT_FOUND
+     */
+    @PostMapping("/reservations/{id}/cancel")
+    public CancellationResponse cancel(@PathVariable long id) {
+        return reservationService.cancel(id);
     }
 }
