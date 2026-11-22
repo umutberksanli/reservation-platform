@@ -31,6 +31,21 @@ jobs:
       - name: Build and run all tests
         run: ./mvnw -B -ntp verify
 
+      # Toplamlari herkese acik bir "notice" olarak yayinlar; hic test calismadiysa ya da atlanan varsa isi basarisiz sayar.
+      - name: Report test totals
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import glob, sys, xml.etree.ElementTree as ET
+          t = f = e = s = 0
+          for p in glob.glob("target/surefire-reports/TEST-*.xml"):
+              r = ET.parse(p).getroot()
+              t += int(r.get("tests")); f += int(r.get("failures")); e += int(r.get("errors")); s += int(r.get("skipped"))
+          msg = f"Tests run: {t}, Failures: {f}, Errors: {e}, Skipped: {s} (database: Testcontainers mysql:8.4, DB_TEST_URL unset)"
+          print(f"::notice title=Test totals::{msg}")
+          sys.exit(0 if t > 0 and s == 0 and f == 0 and e == 0 else 1)
+          EOF
+
       - name: Upload test reports
         if: failure()
         uses: actions/upload-artifact@v7
@@ -38,3 +53,38 @@ jobs:
           name: surefire-reports
           path: target/surefire-reports/
           retention-days: 7
+
+  compose-smoke:
+    name: Docker Compose smoke test
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # Her calistirmada rastgele, yalnizca bu is icin gecerli degerler (hicbir yere kaydedilmez).
+      - name: Create .env with random secrets
+        run: |
+          {
+            echo "DB_PASSWORD=$(openssl rand -hex 24)"
+            echo "MYSQL_ROOT_PASSWORD=$(openssl rand -hex 24)"
+            echo "JWT_SECRET=$(openssl rand -hex 32)"
+            echo "ADMIN_EMAIL=admin@example.com"
+            echo "ADMIN_PASSWORD=$(openssl rand -hex 16)"
+          } > .env
+
+      - name: Build and start the stack
+        run: docker compose up -d --build
+
+      - name: End-to-end smoke test
+        run: |
+          set -a; . ./.env; set +a
+          bash scripts/smoke-test.sh
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose down -v

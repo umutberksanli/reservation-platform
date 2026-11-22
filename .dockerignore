@@ -1,0 +1,14 @@
+# Imaja yalnizca derleme icin gerekenler girer.
+.git
+.github
+.idea
+.vscode
+target
+*.iml
+*.log
+.env
+.env.*
+!.env.example
+scripts
+README.md
+HELP.md
