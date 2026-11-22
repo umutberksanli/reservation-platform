@@ -5,6 +5,7 @@ import static org.hamcrest.Matchers.endsWith;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.verify;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -121,6 +122,35 @@ class UserRegistrationApiTest {
         verify(appUserRepository).existsByEmail("zeynep@example.com"); // on kontrol gercekten atlandi
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM app_user WHERE email = 'zeynep@example.com'", Integer.class)).isEqualTo(1);
+    }
+
+    @Test
+    void locationFromRegistrationReturnsTheUser() throws Exception {
+        String location = register("""
+                {"email": "elif@example.com", "fullName": "Elif Sahin"}
+                """)
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getHeader("Location");
+
+        mockMvc.perform(get(location))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.id").value(lastInsertedId()))
+                .andExpect(jsonPath("$.email").value("elif@example.com"))
+                .andExpect(jsonPath("$.fullName").value("Elif Sahin"))
+                .andExpect(jsonPath("$.createdAt").exists());
+    }
+
+    @Test
+    void getUnknownUserReturns404() throws Exception {
+        long missingId = jdbc.queryForObject("SELECT COALESCE(MAX(id), 0) + 1000 FROM app_user", Long.class);
+
+        mockMvc.perform(get("/api/users/{id}", missingId))
+                .andExpect(status().isNotFound())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.title").value("User not found"))
+                .andExpect(jsonPath("$.code").value("USER_NOT_FOUND"))
+                .andExpect(jsonPath("$.detail").value("User " + missingId + " was not found"));
     }
 
     private ResultActions register(String json) throws Exception {

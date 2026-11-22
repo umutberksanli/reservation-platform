@@ -56,6 +56,60 @@ class SchemaConstraintsTest {
                 .hasMessageContaining("uk_app_user_email");
     }
 
+    // ---------- V2: reservation ----------
+
+    @Test
+    void reservationRequiresExistingEventAndUser() {
+        insertEvent("FK Etkinlik", 5);
+        long eventId = lastId();
+        insertUser("fk@example.com", "FK Kullanici");
+        long userId = lastId();
+
+        assertThatThrownBy(() -> insertReservation(eventId + 100_000, userId, "CONFIRMED"))
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("fk_reservation_event");
+        assertThatThrownBy(() -> insertReservation(eventId, userId + 100_000, "CONFIRMED"))
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("fk_reservation_user");
+    }
+
+    @Test
+    void sameUserCannotHaveTwoActiveReservationsForSameEvent() {
+        insertEvent("Tekil Etkinlik", 5);
+        long eventId = lastId();
+        insertUser("tekil@example.com", "Tekil Kullanici");
+        long userId = lastId();
+
+        insertReservation(eventId, userId, "CONFIRMED");
+        assertThatThrownBy(() -> insertReservation(eventId, userId, "CONFIRMED"))
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("uk_reservation_active_user_event");
+    }
+
+    @Test
+    void cancelledReservationsDoNotBlockANewActiveOne() {
+        insertEvent("Iptal Etkinlik", 5);
+        long eventId = lastId();
+        insertUser("iptal@example.com", "Iptal Kullanici");
+        long userId = lastId();
+
+        insertReservation(eventId, userId, "CANCELLED");
+        insertReservation(eventId, userId, "CANCELLED");
+        assertThat(insertReservation(eventId, userId, "CONFIRMED")).isEqualTo(1);
+    }
+
+    @Test
+    void reservationStatusMustBeKnown() {
+        insertEvent("Durum Etkinlik", 5);
+        long eventId = lastId();
+        insertUser("durum@example.com", "Durum Kullanici");
+        long userId = lastId();
+
+        assertThatThrownBy(() -> insertReservation(eventId, userId, "PENDING"))
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("chk_reservation_status");
+    }
+
     private int insertEvent(String name, int capacity) {
         return jdbc.update(
                 "INSERT INTO event (name, starts_at, capacity) VALUES (?, '2027-01-15 19:00:00', ?)",
@@ -64,5 +118,14 @@ class SchemaConstraintsTest {
 
     private int insertUser(String email, String fullName) {
         return jdbc.update("INSERT INTO app_user (email, full_name) VALUES (?, ?)", email, fullName);
+    }
+
+    private int insertReservation(long eventId, long userId, String status) {
+        return jdbc.update(
+                "INSERT INTO reservation (event_id, user_id, status) VALUES (?, ?, ?)", eventId, userId, status);
+    }
+
+    private long lastId() {
+        return jdbc.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
     }
 }
