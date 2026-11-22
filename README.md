@@ -2,7 +2,7 @@
 
 Kontenjanlı etkinlik rezervasyonu ve FIFO (ilk gelen ilk alır) bekleme listesi sunan bir REST API.
 
-> Durum: **3. aşama – Flyway ve ilk veritabanı şeması.** Henüz API ve rezervasyon kuralları yok.
+> Durum: **4. aşama – Etkinlik API'si** (oluşturma, listeleme, detay). Henüz rezervasyon ve bekleme listesi yok.
 
 ## Teknolojiler
 
@@ -85,7 +85,8 @@ Flyway uygulananları `flyway_schema_history` tablosuna yazar; bir migration iki
   Şifre/kimlik doğrulama alanları bu aşamada **yok**; gerektiğinde ayrı bir migration ile eklenecek.
 - **Ortak alanlar:** `id` `BIGINT AUTO_INCREMENT`, `created_at` veritabanı tarafından otomatik doldurulur.
 - **Kısıtlara isim verildi** (`chk_event_capacity_positive`, `uk_app_user_email` …), böylece hata mesajlarında hangi kuralın ihlal edildiği okunabilir.
-- **Zaman:** `DATETIME` saat dilimi bilgisi tutmaz; tarihlerin UTC olarak saklanması planlanıyor (API aşamasında uygulama tarafında ayarlanacak).
+- **Zaman:** `DATETIME` saat dilimi bilgisi tutmaz; bu yüzden tüm zamanlar **UTC** olarak saklanır
+  (`spring.jpa.properties.hibernate.jdbc.time_zone=UTC`). API'de zamanlar ISO-8601 UTC biçimindedir: `2027-01-15T19:00:00Z`.
 
 ## Çalıştırma (Windows)
 
@@ -99,6 +100,66 @@ Ardından tarayıcıda: <http://localhost:8080/api/health>
 {"status":"UP","app":"event-reservation"}
 ```
 
+## Etkinlik API'si
+
+| Metot | Adres | Başarılı cevap | Hata |
+|---|---|---|---|
+| `POST` | `/api/events` | `201 Created` + `Location: /api/events/{id}` | `400` geçersiz istek |
+| `GET` | `/api/events` | `200 OK`, başlangıç zamanına göre sıralı liste | – |
+| `GET` | `/api/events/{id}` | `200 OK` | `404` bulunamadı |
+
+İstek kuralları (`CreateEventRequest`): `name` boş olamaz, en fazla 200 karakter; `startsAt` zorunlu (UTC); `capacity` pozitif tam sayı.
+Hatalar [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) `application/problem+json` biçiminde döner.
+API'de entity yerine ayrı DTO'lar (`CreateEventRequest`, `EventResponse`) kullanılır.
+
+### Örnek istekler (PowerShell)
+
+Uygulama çalışırken (`.\mvnw.cmd spring-boot:run`) ayrı bir PowerShell penceresinde:
+
+```powershell
+# Etkinlik oluştur
+curl.exe -i -X POST http://localhost:8080/api/events `
+  -H "Content-Type: application/json" `
+  -d '{\"name\": \"Spring Boot Workshop\", \"startsAt\": \"2027-01-15T19:00:00Z\", \"capacity\": 30}'
+```
+
+```http
+HTTP/1.1 201
+Location: http://localhost:8080/api/events/1
+Content-Type: application/json
+
+{"id":1,"name":"Spring Boot Workshop","startsAt":"2027-01-15T19:00:00Z","capacity":30,"createdAt":"2026-11-22T19:51:45.961544Z"}
+```
+
+```powershell
+# Listele
+curl.exe http://localhost:8080/api/events
+
+# Detay (id'yi Location başlığından al)
+curl.exe http://localhost:8080/api/events/1
+
+# Olmayan ID -> 404
+curl.exe -i http://localhost:8080/api/events/999
+```
+
+```http
+HTTP/1.1 404
+Content-Type: application/problem+json
+
+{"detail":"Event 999 was not found","status":404,"title":"Event not found"}
+```
+
+Geçersiz istek (ör. boş ad, `capacity: 0`) `400 Bad Request` döner ve veritabanına hiçbir şey yazılmaz.
+
+> `curl.exe` örneklerindeki `\"` kaçışları **Windows PowerShell 5.1** içindir. Git Bash'te tek tırnak içinde düz `"` kullan.
+
+PowerShell'in kendi komutuyla da gönderilebilir:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/events -ContentType 'application/json' `
+  -Body (@{ name = 'Java Meetup'; startsAt = '2027-04-10T17:30:00Z'; capacity = 50 } | ConvertTo-Json)
+```
+
 ## Testler
 
 ```powershell
@@ -110,13 +171,15 @@ Ardından tarayıcıda: <http://localhost:8080/api/health>
   `DB_PASSWORD` tanımlı değilse **atlanır** (Skipped).
   - `FlywayMigrationTest`: test veritabanını boşaltır, uygulamayı iki kez başlatır; ilk açılışta V1'in uygulandığını ve tabloların oluştuğunu, ikinci açılışta tekrar uygulanmadığını doğrular.
   - `SchemaConstraintsTest`: pozitif kapasite, boş olmayan ad ve benzersiz e-posta kurallarını dener (değişiklikler geri alınır).
+  - `EventApiTest`: HTTP üzerinden oluşturma (201 + `Location`, UTC saklama), sıralı listeleme, detay, olmayan ID için 404 ve
+    geçersiz istek için 400 davranışını dener (değişiklikler geri alınır).
 
 ## Yol haritası
 
 1. [x] Spring Web iskeleti
 2. [x] MySQL bağlantısı
 3. [x] Flyway ve ilk şema (`event`, `app_user`)
-4. [ ] JPA entity'leri ve Etkinlik API'si
+4. [x] Etkinlik API'si (oluşturma, listeleme, detay)
 5. [ ] Kontenjanlı rezervasyon
 6. [ ] FIFO bekleme listesi ve otomatik terfi
 7. [ ] Eşzamanlılık (aynı anda gelen istekler) testleri
