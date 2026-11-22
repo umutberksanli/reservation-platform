@@ -14,6 +14,7 @@ public class EventNotFoundException extends ErrorResponseException {
     private static ProblemDetail problem(long id) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, "Event " + id + " was not found");
         problem.setTitle("Event not found");
+        problem.setProperty("code", "EVENT_NOT_FOUND");
         return problem;
     }
 }
