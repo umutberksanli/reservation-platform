@@ -7,13 +7,18 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
+
+import com.umutberk.eventreservation.security.SecurityConfig;
+import com.umutberk.eventreservation.security.WebSecurityConfig;
 
 /**
  * Sadece web katmanini (controller) ayaga kaldirip HTTP istegini taklit eder.
  * Gercek bir sunucu baslatmaz, bu yuzden hizlidir.
  */
 @WebMvcTest(HealthController.class)
+@Import({SecurityConfig.class, WebSecurityConfig.class}) // gercek guvenlik kurallari: /api/health herkese acik olmali
 class HealthControllerTest {
 
     @Autowired

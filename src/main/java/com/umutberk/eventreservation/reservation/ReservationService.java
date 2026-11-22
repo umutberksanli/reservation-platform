@@ -22,6 +22,7 @@ import com.umutberk.eventreservation.reservation.ReservationProblems.Reservation
 import com.umutberk.eventreservation.reservation.dto.CancellationResponse;
 import com.umutberk.eventreservation.reservation.dto.ReservationResponse;
 import com.umutberk.eventreservation.reservation.dto.UserReservationResponse;
+import com.umutberk.eventreservation.security.Actor;
 import com.umutberk.eventreservation.user.AppUser;
 import com.umutberk.eventreservation.user.AppUserRepository;
 import com.umutberk.eventreservation.user.UserNotFoundException;
@@ -97,13 +98,15 @@ public class ReservationService {
      * (alreadyCancelled = true); ikinci bir terfi yapilmaz.
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
-    public CancellationResponse cancel(long reservationId) {
+    public CancellationResponse cancel(long reservationId, Actor actor) {
         // Kilitlenecek etkinligi bul (event_id degismez); kaydin DURUMU kilitten sonra okunur.
         long eventId = reservationRepository.findEventIdById(reservationId)
                 .orElseThrow(() -> new ReservationNotFoundException(reservationId));
         Event event = lockEvent(eventId);
         Reservation reservation = reservationRepository.findById(reservationId)
                 .orElseThrow(() -> new ReservationNotFoundException(reservationId));
+        // Yalnizca sahibi ya da ADMIN; aksi halde 403 ve hicbir sey degismez (sahip hic degismeyen bir alandir).
+        actor.requireSelfOrAdmin(reservation.getUser().getId());
 
         if (reservation.getStatus() == ReservationStatus.CANCELLED) {
             return new CancellationResponse(toResponse(reservation), true, List.of());
@@ -119,10 +122,11 @@ public class ReservationService {
     }
 
     @Transactional(readOnly = true, isolation = Isolation.READ_COMMITTED)
-    public ReservationResponse findById(long id) {
-        return reservationRepository.findById(id)
-                .map(this::toResponse)
+    public ReservationResponse findById(long id, Actor actor) {
+        Reservation reservation = reservationRepository.findById(id)
                 .orElseThrow(() -> new ReservationNotFoundException(id));
+        actor.requireSelfOrAdmin(reservation.getUser().getId());
+        return toResponse(reservation);
     }
 
     /** Kullanicinin bu etkinlikteki guncel durumu (onayli ya da bekleyen + sira konumu). */

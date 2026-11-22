@@ -3,6 +3,7 @@ package com.umutberk.eventreservation.user;
 import java.net.URI;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -11,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
+import com.umutberk.eventreservation.security.Actor;
 import com.umutberk.eventreservation.user.dto.RegisterUserRequest;
 import com.umutberk.eventreservation.user.dto.UserResponse;
 
@@ -37,9 +39,16 @@ public class UserController {
         return ResponseEntity.created(location).body(created);
     }
 
-    /** Kayit cevabindaki Location bu adresi gosterir. Bulunamazsa 404. */
+    /** Giris yapmis kullanicinin kendi bilgileri. */
+    @GetMapping("/me")
+    public UserResponse me(Authentication authentication) {
+        return appUserService.findById(Actor.from(authentication).userId());
+    }
+
+    /** Kayit cevabindaki Location bu adresi gosterir. Yalnizca kendisi ya da ADMIN (403); bulunamazsa 404. */
     @GetMapping("/{id}")
-    public UserResponse get(@PathVariable long id) {
+    public UserResponse get(@PathVariable long id, Authentication authentication) {
+        Actor.from(authentication).requireSelfOrAdmin(id);
         return appUserService.findById(id);
     }
 }

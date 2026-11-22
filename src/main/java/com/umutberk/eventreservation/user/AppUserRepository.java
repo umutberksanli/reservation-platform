@@ -1,5 +1,7 @@
 package com.umutberk.eventreservation.user;
 
+import java.util.Optional;
+
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface AppUserRepository extends JpaRepository<AppUser, Long> {
@@ -9,4 +11,6 @@ public interface AppUserRepository extends JpaRepository<AppUser, Long> {
      * "Ayse@x.com" ile "ayse@x.com" ayni kabul edilir; sorgu indeksi de kullanabilir.
      */
     boolean existsByEmail(String email);
+
+    Optional<AppUser> findByEmail(String email);
 }

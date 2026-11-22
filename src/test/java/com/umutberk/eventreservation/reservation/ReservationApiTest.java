@@ -14,6 +14,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static com.umutberk.eventreservation.support.TestAuth.asAdmin;
+import static com.umutberk.eventreservation.support.TestAuth.asUser;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -84,7 +86,7 @@ class ReservationApiTest {
                 .andExpect(jsonPath("$.waitlistPosition").value(nullValue()))
                 .andReturn().getResponse().getHeader("Location");
 
-        mockMvc.perform(get(location))
+        mockMvc.perform(get(location).with(asUser(userId)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("CONFIRMED"));
     }
@@ -112,15 +114,112 @@ class ReservationApiTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"{}", "{\"userId\": null}", "{\"userId\": 0}", "{\"userId\": -5}", "{\"userId\": \"abc\"}", "not json"})
+    @ValueSource(strings = {"{\"userId\": 0}", "{\"userId\": -5}", "{\"userId\": \"abc\"}", "not json"})
     void invalidBodyReturns400(String body) throws Exception {
         long eventId = createEvent(3);
 
-        mockMvc.perform(post("/api/events/{eventId}/reservations", eventId)
+        mockMvc.perform(post("/api/events/{eventId}/reservations", eventId).with(asAdmin(createUser()))
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isBadRequest())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
         assertThat(WaitlistInvariants.count(jdbc, eventId, "CONFIRMED")).isZero();
+    }
+
+    /** Govdesiz, bos govde ve userId=null: hepsi "giris yapan kullanici icin" demektir. */
+    @ParameterizedTest
+    @ValueSource(strings = {"", "{}", "{\"userId\": null}"})
+    void missingUserIdMeansTheAuthenticatedUser(String body) throws Exception {
+        long eventId = createEvent(3);
+        long userId = createUser();
+
+        var request = post("/api/events/{eventId}/reservations", eventId).with(asUser(userId));
+        if (!body.isEmpty()) {
+            request = request.contentType(MediaType.APPLICATION_JSON).content(body);
+        }
+        mockMvc.perform(request)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.userId").value(userId));
+    }
+
+    // ------------------------------------------------------------ kimlik ve yetki
+
+    @Test
+    void reservingWithoutTokenReturns401() throws Exception {
+        long eventId = createEvent(3);
+
+        mockMvc.perform(post("/api/events/{eventId}/reservations", eventId))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string("WWW-Authenticate", "Bearer"))
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+        assertThat(WaitlistInvariants.count(jdbc, eventId, "CONFIRMED")).isZero();
+    }
+
+    @Test
+    void userCannotReserveOnBehalfOfSomeoneElseButAdminCan() throws Exception {
+        long eventId = createEvent(3);
+        long me = createUser();
+        long other = createUser();
+
+        mockMvc.perform(post("/api/events/{eventId}/reservations", eventId).with(asUser(me))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"userId\": " + other + "}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+        assertThat(WaitlistInvariants.count(jdbc, eventId, "CONFIRMED")).isZero();
+
+        mockMvc.perform(post("/api/events/{eventId}/reservations", eventId).with(asAdmin(me))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"userId\": " + other + "}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.userId").value(other));
+    }
+
+    /** Eski acik: rezervasyon ID'sini bilen herkes iptal edebiliyordu. Artik 403 ve HICBIR SEY degismez. */
+    @Test
+    void otherUserCannotCancelAndNothingChanges() throws Exception {
+        long eventId = createEvent(1);
+        long owner = createUser();
+        long waiter = createUser();
+        long attacker = createUser();
+        long ownerReservation = idOf(reserve(eventId, owner));
+        reserve(eventId, waiter);
+
+        mockMvc.perform(post("/api/reservations/{id}/cancel", ownerReservation).with(asUser(attacker)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+
+        assertThat(WaitlistInvariants.confirmedUsers(jdbc, eventId)).containsExactly(owner);
+        assertThat(WaitlistInvariants.waitingUsersInOrder(jdbc, eventId)).containsExactly(waiter);
+        assertThat(jdbc.queryForObject("SELECT cancelled_at FROM reservation WHERE id = ?", String.class, ownerReservation))
+                .isNull();
+    }
+
+    @Test
+    void adminCanCancelAnyReservationAndPromotionStillHappens() throws Exception {
+        long eventId = createEvent(1);
+        long owner = createUser();
+        long waiter = createUser();
+        long ownerReservation = idOf(reserve(eventId, owner));
+        long waiterReservation = idOf(reserve(eventId, waiter));
+
+        mockMvc.perform(post("/api/reservations/{id}/cancel", ownerReservation).with(asAdmin(createUser())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.promoted[0].id").value(waiterReservation));
+        assertThat(WaitlistInvariants.confirmedUsers(jdbc, eventId)).containsExactly(waiter);
+    }
+
+    @Test
+    void otherUserCannotReadReservationOrStatus() throws Exception {
+        long eventId = createEvent(2);
+        long owner = createUser();
+        long stranger = createUser();
+        long reservationId = idOf(reserve(eventId, owner));
+
+        mockMvc.perform(get("/api/reservations/{id}", reservationId).with(asUser(stranger)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+        mockMvc.perform(get("/api/events/{e}/users/{u}/reservation", eventId, owner).with(asUser(stranger)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/reservations/{id}", reservationId).with(asAdmin(stranger)))
+                .andExpect(status().isOk());
     }
 
     // ------------------------------------------------------------ bekleme listesi (FIFO)
@@ -330,10 +429,10 @@ class ReservationApiTest {
     void unknownReservationReturns404OnGetAndCancel() throws Exception {
         long missingId = jdbc.queryForObject("SELECT COALESCE(MAX(id), 0) + 1000 FROM reservation", Long.class);
 
-        mockMvc.perform(get("/api/reservations/{id}", missingId))
+        mockMvc.perform(get("/api/reservations/{id}", missingId).with(asUser(1)))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("RESERVATION_NOT_FOUND"));
-        cancel(missingId)
+        mockMvc.perform(post("/api/reservations/{id}/cancel", missingId).with(asUser(1)))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("RESERVATION_NOT_FOUND"));
     }
@@ -361,18 +460,20 @@ class ReservationApiTest {
 
     // ------------------------------------------------------------ yardimcilar
 
+    /** Kullanici kendi adina, kendi token'iyla rezervasyon yapar (govdesiz). */
     private ResultActions reserve(long eventId, long userId) throws Exception {
-        return mockMvc.perform(post("/api/events/{eventId}/reservations", eventId)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"userId\": " + userId + "}"));
+        return mockMvc.perform(post("/api/events/{eventId}/reservations", eventId).with(asUser(userId)));
     }
 
+    /** Kaydin sahibi, kendi token'iyla iptal eder. */
     private ResultActions cancel(long reservationId) throws Exception {
-        return mockMvc.perform(post("/api/reservations/{id}/cancel", reservationId));
+        long owner = jdbc.queryForObject("SELECT user_id FROM reservation WHERE id = ?", Long.class, reservationId);
+        return mockMvc.perform(post("/api/reservations/{id}/cancel", reservationId).with(asUser(owner)));
     }
 
     private ResultActions statusOf(long eventId, long userId) throws Exception {
-        return mockMvc.perform(get("/api/events/{eventId}/users/{userId}/reservation", eventId, userId));
+        return mockMvc.perform(get("/api/events/{eventId}/users/{userId}/reservation", eventId, userId)
+                .with(asUser(userId)));
     }
 
     private static long idOf(ResultActions result) throws Exception {

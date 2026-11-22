@@ -17,6 +17,8 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
@@ -123,6 +125,29 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         problem.setTitle("Data conflict");
         problem.setProperty("code", "DATA_CONFLICT");
         return handleExceptionInternal(ex, problem, new HttpHeaders(), HttpStatus.CONFLICT, request);
+    }
+
+    /**
+     * Controller icinden yukari cikan Spring Security hatalari (filtre seviyesindekiler
+     * ProblemJsonSecurityHandlers'ta karsilanir). Aksi halde asagidaki genel 500'e duserlerdi.
+     */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<Object> handleAccessDenied(AccessDeniedException ex, WebRequest request) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN,
+                "You do not have permission for this operation");
+        problem.setTitle("Forbidden");
+        problem.setProperty("code", "FORBIDDEN");
+        return handleExceptionInternal(ex, problem, new HttpHeaders(), HttpStatus.FORBIDDEN, request);
+    }
+
+    @ExceptionHandler(AuthenticationException.class)
+    public ResponseEntity<Object> handleAuthentication(AuthenticationException ex, WebRequest request) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNAUTHORIZED, "Authentication is required");
+        problem.setTitle("Unauthorized");
+        problem.setProperty("code", "UNAUTHORIZED");
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(HttpHeaders.WWW_AUTHENTICATE, "Bearer");
+        return handleExceptionInternal(ex, problem, headers, HttpStatus.UNAUTHORIZED, request);
     }
 
     /** Beklenmeyen her sey: 500, genel mesaj; ayrinti yalnizca sunucu loguna. */

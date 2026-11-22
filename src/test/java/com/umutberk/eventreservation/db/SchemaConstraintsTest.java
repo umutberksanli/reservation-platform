@@ -165,6 +165,19 @@ class SchemaConstraintsTest {
         assertThat(insertWaitlisted(ids[0], ids[1], 2)).isEqualTo(1);
     }
 
+    // ---------- V4: rol ----------
+
+    @Test
+    void newUserDefaultsToUserRoleAndRoleMustBeKnown() {
+        insertUser("v4-role@example.com", "V4");
+        assertThat(jdbc.queryForObject("SELECT role FROM app_user WHERE id = ?", String.class, lastId())).isEqualTo("USER");
+
+        assertThatThrownBy(() -> jdbc.update(
+                "INSERT INTO app_user (email, full_name, role) VALUES ('v4-root@example.com', 'Root', 'ROOT')"))
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("chk_app_user_role");
+    }
+
     private long[] eventAndUser(String email) {
         insertEvent("V3 Etkinlik", 1);
         long eventId = lastId();

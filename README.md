@@ -23,6 +23,8 @@ Bağlantı bilgileri ortam değişkenlerinden okunur; şifre hiçbir dosyaya yaz
 | `DB_USERNAME` | `reservation_app` | Uygulama kullanıcısı |
 | `DB_PASSWORD` | – (**zorunlu**) | Uygulama kullanıcısının şifresi |
 | `DB_TEST_URL` | `jdbc:mysql://localhost:3306/reservation_platform_test` | Testlerin kullandığı ayrı veritabanı |
+| `JWT_SECRET` | – (boşsa geliştirme için rastgele) | JWT imza anahtarı, **en az 32 karakter**; tanımlı değilse uygulama her açılışta yeni anahtar üretir ve eski token'lar geçersiz olur |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | – | İkisi de verilirse açılışta bu e-postayla **ADMIN** kullanıcı oluşturulur (varsa ADMIN yapılır) |
 
 ### Projeye özel yerel MySQL (önerilen, Windows)
 
@@ -115,6 +117,41 @@ Ardından tarayıcıda: <http://localhost:8080/api/health>
 
 ```json
 {"status":"UP","app":"event-reservation"}
+```
+
+## Kimlik doğrulama ve yetki
+
+API durumsuzdur: giriş yapınca kısa ömürlü bir **JWT** alınır ve sonraki isteklerde `Authorization: Bearer <token>` başlığıyla gönderilir.
+Şifreler yalnızca **BCrypt** özeti olarak saklanır (`app_user.password_hash`, V4); düz şifre hiçbir yerde tutulmaz, cevaplarda dönmez.
+
+| Metot | Adres | Açıklama |
+|---|---|---|
+| `POST` | `/api/users` | Kayıt (herkese açık): `{"email", "fullName", "password"}` — şifre 8–72 karakter; rol her zaman `USER` |
+| `POST` | `/api/auth/token` | Giriş (herkese açık): `{"email", "password"}` → `{"accessToken", "tokenType": "Bearer", "expiresIn": 3600}` |
+| `GET` | `/api/users/me` | Giriş yapan kullanıcı |
+
+**Kim neyi yapabilir**
+
+| İşlem | Kimliksiz | `USER` | `ADMIN` |
+|---|---|---|---|
+| Sağlık, etkinlik listesi/detayı, kayıt, giriş, API dokümanı | ✓ | ✓ | ✓ |
+| Etkinlik oluşturma | 401 | **403** | ✓ |
+| Rezervasyon, iptal, durum sorgusu, kayıt listesi | 401 | yalnızca **kendi** kayıtları (başkasınınki **403**) | herkesinki |
+| Başkası adına rezervasyon (`{"userId": X}`) | 401 | 403 | ✓ |
+
+- Token'da yalnızca kullanıcı ID'si (`sub`) ve rol (`roles`) bulunur; e-posta gibi kişisel bilgi konmaz. İmza (HS256), süre ve `iss` doğrulanır.
+- Yanlış şifre ile kayıtlı olmayan e-posta **aynı** `401 INVALID_CREDENTIALS` cevabını alır (hangi e-postanın kayıtlı olduğu anlaşılmasın);
+  kullanıcı yoksa da aynı maliyette bir BCrypt karşılaştırması yapılır.
+- V4'ten önce oluşmuş, şifresi olmayan kullanıcılar giriş yapamaz.
+- İlk admin: `ADMIN_EMAIL` ve `ADMIN_PASSWORD` ile açılışta oluşturulur. Kayıt ucundan ADMIN olunamaz.
+
+```powershell
+# Giriş yap ve token'ı değişkene al
+$token = (Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/auth/token -ContentType 'application/json' `
+  -Body (@{ email = 'ayse@example.com'; password = 'gizli-sifre-123' } | ConvertTo-Json)).accessToken
+
+# Korumalı uç
+curl.exe http://localhost:8080/api/users/me -H "Authorization: Bearer $token"
 ```
 
 ## Etkinlik API'si
@@ -250,7 +287,7 @@ Content-Type: application/problem+json
 
 | Metot | Adres | Ne yapar |
 |---|---|---|
-| `POST` | `/api/events/{eventId}/reservations` (gövde: `{"userId": 1}`) | Yer ayırır ya da bekleme listesine alır |
+| `POST` | `/api/events/{eventId}/reservations` (gövde yok; ADMIN başkası adına `{"userId": 1}`) | Giriş yapan kullanıcı için yer ayırır ya da bekleme listesine alır |
 | `GET` | `/api/reservations/{id}` | Kaydın durumu ve (bekliyorsa) sıra konumu |
 | `GET` | `/api/events/{eventId}/users/{userId}/reservation` | Kullanıcının o etkinlikteki **aktif** kaydı: durum ve sıra konumu |
 | `POST` | `/api/reservations/{id}/cancel` | Onaylı ya da bekleyen kaydı iptal eder; boşalan yeri sıradakine verir |
@@ -333,10 +370,10 @@ Böylece bir etkinlikteki bütün değişiklikler tek sırada olur ve her işlem
 
 ### Örnek istekler (PowerShell)
 
-Kapasitesi **1** olan etkinlik 1; Ayşe (1), Mehmet (2), Zeynep (3) sırayla rezervasyon yapar (çıktılar gerçek çalıştırmadan kısaltıldı):
+Kapasitesi **1** olan etkinlik 1; Ayşe (1), Mehmet (2), Zeynep (3) **her biri kendi token'ıyla** sırayla rezervasyon yapar (çıktılar gerçek çalıştırmadan kısaltıldı; `$token` için bkz. *Kimlik doğrulama*). Durum sorgusu ve iptal de kaydın sahibinin token'ıyla yapılır:
 
 ```powershell
-curl.exe -i -X POST http://localhost:8080/api/events/1/reservations -H "Content-Type: application/json" -d '{\"userId\": 1}'
+curl.exe -i -X POST http://localhost:8080/api/events/1/reservations -H "Authorization: Bearer $token"
 ```
 
 ```http
@@ -398,6 +435,9 @@ Tüm hatalar aynı biçimde, `application/problem+json` ([RFC 9457](https://www.
 | 400 | `INVALID_PARAMETER` | Yol/sorgu parametresinin tipi yanlış (ör. `/api/events/abc`) |
 | 404 | `NOT_FOUND` | Böyle bir adres yok |
 | 404 | `EVENT_NOT_FOUND`, `USER_NOT_FOUND`, `RESERVATION_NOT_FOUND`, `NO_ACTIVE_RESERVATION` | Kayıt yok |
+| 401 | `UNAUTHORIZED` | Token yok, süresi dolmuş ya da imzası geçersiz; `WWW-Authenticate: Bearer` başlığı döner |
+| 401 | `INVALID_CREDENTIALS` | Giriş: e-posta ya da şifre yanlış (hangisi olduğu söylenmez) |
+| 403 | `FORBIDDEN` | Giriş yapılmış ama yetki yok (başkasının kaydı, ADMIN gerektiren işlem) |
 | 405 | `METHOD_NOT_ALLOWED` | Yanlış HTTP metodu; `Allow` başlığı izinli metotları söyler |
 | 409 | `EMAIL_ALREADY_REGISTERED`¹, `ALREADY_RESERVED`, `DATA_CONFLICT` | Mevcut veriyle çakışma |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | `Content-Type` desteklenmiyor |
@@ -444,4 +484,4 @@ Tüm hatalar aynı biçimde, `application/problem+json` ([RFC 9457](https://www.
 6. [x] Kontenjanlı rezervasyon ve eşzamanlılık testi
 7. [x] Rezervasyon iptali
 8. [x] FIFO bekleme listesi ve iptalde otomatik terfi
-9. [ ] Kimlik doğrulama (şu an kimin iptal edebileceği kısıtlı değil)
+9. [x] Kimlik doğrulama (JWT) ve yetki: yalnızca sahibi ya da ADMIN iptal edebilir
