@@ -14,7 +14,6 @@ import java.util.List;
 import javax.crypto.spec.SecretKeySpec;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -42,7 +41,6 @@ import com.nimbusds.jose.jwk.source.ImmutableSecret;
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Transactional
-@EnabledIfEnvironmentVariable(named = "DB_PASSWORD", matches = ".+")
 class AuthApiTest {
 
     private static final String PASSWORD = "cok-gizli-sifre-42";

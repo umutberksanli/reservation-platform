@@ -9,7 +9,6 @@ import javax.sql.DataSource;
 
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -22,7 +21,6 @@ import com.umutberk.eventreservation.EventReservationApplication;
  * 1. acilis: bos veritabaninda V1 migration'i otomatik uygulanir, tablolar olusur.
  * 2. acilis: migration TEKRAR uygulanmaz (gecmis tablosu degismez).
  */
-@EnabledIfEnvironmentVariable(named = "DB_PASSWORD", matches = ".+")
 class FlywayMigrationTest {
 
     @Test

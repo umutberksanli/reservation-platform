@@ -463,9 +463,17 @@ Tüm hatalar aynı biçimde, `application/problem+json` ([RFC 9457](https://www.
 .\mvnw.cmd test
 ```
 
-- `HealthControllerTest` veritabanı olmadan her zaman çalışır.
-- Diğer testler gerçek MySQL'e, `test` profiliyle **ayrı test veritabanına** (`DB_TEST_URL`) bağlanır; geliştirme verisine dokunmaz.
-  `DB_PASSWORD` tanımlı değilse **atlanır** (Skipped).
+**Testler hangi veritabanını kullanır?** (`support/TestDatabaseInitializer`)
+
+1. `DB_TEST_URL` tanımlıysa o veritabanı (`DB_PASSWORD` ile). Bu bilgisayardaki `scripts/dev-mysql.ps1` kurulumu böyle çalışır.
+2. Tanımlı değilse **Testcontainers** ile geçici bir **MySQL 8.4** konteyneri başlatılır (Docker gerekir); CI böyle çalışır.
+   Konteyner tüm testler için bir kez başlar, testler bitince silinir. Şifresi her çalıştırmada rastgele üretilir.
+3. İkisi de yoksa testler **açık bir hatayla başarısız olur** (`Could not find a valid Docker environment`); hiçbir test sessizce atlanmaz.
+
+Testler her zaman **ayrı test veritabanını** kullanır; geliştirme verisine dokunmaz.
+
+- `HealthControllerTest` veritabanı olmadan çalışan web katmanı testidir (gerçek güvenlik kurallarıyla).
+- Diğer testler gerçek MySQL'e bağlanır:
   - `FlywayMigrationTest`: test veritabanını boşaltır, uygulamayı iki kez başlatır; ilk açılışta V1–V3'ün uygulandığını ve tabloların beklenen sütunlarla oluştuğunu, ikinci açılışta tekrar uygulanmadığını doğrular.
   - `SchemaConstraintsTest`: pozitif kapasite, boş olmayan ad ve benzersiz e-posta kurallarını dener (değişiklikler geri alınır).
   - `EventApiTest`: HTTP üzerinden oluşturma (201 + `Location`, UTC saklama), sıralı listeleme, detay, olmayan ID için 404 ve

@@ -14,7 +14,6 @@ import static com.umutberk.eventreservation.support.TestAuth.asAdmin;
 import static com.umutberk.eventreservation.support.TestAuth.asUser;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -35,7 +34,6 @@ import org.springframework.web.bind.annotation.RestController;
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Import(ErrorResponsesApiTest.FailingController.class)
-@EnabledIfEnvironmentVariable(named = "DB_PASSWORD", matches = ".+")
 class ErrorResponsesApiTest {
 
     /** Yalnizca bu testte yuklenir: beklenmeyen hata ve kilit zaman asimi uretir. */
