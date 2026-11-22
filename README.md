@@ -2,7 +2,7 @@
 
 Kontenjanlı etkinlik rezervasyonu ve FIFO (ilk gelen ilk alır) bekleme listesi sunan bir REST API.
 
-> Durum: **4. aşama – Etkinlik API'si** (oluşturma, listeleme, detay). Henüz rezervasyon ve bekleme listesi yok.
+> Durum: **5. aşama – Kullanıcı kaydı API'si.** Etkinlik ve kullanıcı oluşturulabiliyor; henüz rezervasyon ve bekleme listesi yok.
 
 ## Teknolojiler
 
@@ -160,6 +160,70 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/events -ContentTyp
   -Body (@{ name = 'Java Meetup'; startsAt = '2027-04-10T17:30:00Z'; capacity = 50 } | ConvertTo-Json)
 ```
 
+## Kullanıcı kaydı API'si
+
+| Metot | Adres | Başarılı cevap | Hata |
+|---|---|---|---|
+| `POST` | `/api/users` | `201 Created` + `Location: /api/users/{id}` | `400` boş/geçersiz alan, `409` e-posta zaten kayıtlı |
+
+İstek kuralları (`RegisterUserRequest`): `email` geçerli bir e-posta, en fazla 254 karakter; `fullName` boş olamaz, en fazla 100 karakter.
+Baş/son boşluklar doğrulamadan önce kırpılır. E-posta **küçük harfe çevrilerek** saklanır.
+
+**E-posta benzersizliği iki katmanda korunur:**
+
+1. **Java ön kontrolü** (`existsByEmail`): kayıtlı e-postayı veritabanına yazmaya çalışmadan yakalar.
+2. **Veritabanı kısıtı** (V1'deki `uk_app_user_email`): iki istek aynı anda gelip ikisi de 1. adımdan geçerse
+   MySQL ikinci kaydı reddeder; servis bu hatayı yakalayıp yine `409` döndürür.
+   Sütunun karşılaştırma ayarı (`utf8mb4_0900_ai_ci`) büyük/küçük harf duyarsız olduğu için
+   `AYSE@x.com` ile `ayse@x.com` veritabanında da aynı kabul edilir.
+
+> `Location` adresi kaydın kalıcı adresini gösterir; `GET /api/users/{id}` ucu henüz yok (ilerideki bir aşamada eklenecek).
+
+### Örnek istekler (PowerShell)
+
+```powershell
+# Kayıt
+curl.exe -i -X POST http://localhost:8080/api/users `
+  -H "Content-Type: application/json" `
+  -d '{\"email\": \"Ayse.Yilmaz@Example.com\", \"fullName\": \"Ayse Yilmaz\"}'
+```
+
+```http
+HTTP/1.1 201
+Location: http://localhost:8080/api/users/1
+Content-Type: application/json
+
+{"id":1,"email":"ayse.yilmaz@example.com","fullName":"Ayse Yilmaz","createdAt":"2026-11-22T20:01:06.356721Z"}
+```
+
+```powershell
+# Aynı e-posta, farklı büyük/küçük harf -> 409
+curl.exe -i -X POST http://localhost:8080/api/users `
+  -H "Content-Type: application/json" `
+  -d '{\"email\": \"AYSE.YILMAZ@example.com\", \"fullName\": \"Baska Biri\"}'
+```
+
+```http
+HTTP/1.1 409
+Content-Type: application/problem+json
+
+{"detail":"A user with this email address is already registered","status":409,"title":"Email already registered"}
+```
+
+```powershell
+# Geçersiz alanlar -> 400
+curl.exe -i -X POST http://localhost:8080/api/users `
+  -H "Content-Type: application/json" `
+  -d '{\"email\": \"not-an-email\", \"fullName\": \"\"}'
+```
+
+```http
+HTTP/1.1 400
+Content-Type: application/problem+json
+
+{"detail":"Invalid request content.","status":400,"title":"Bad Request"}
+```
+
 ## Testler
 
 ```powershell
@@ -173,6 +237,8 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/events -ContentTyp
   - `SchemaConstraintsTest`: pozitif kapasite, boş olmayan ad ve benzersiz e-posta kurallarını dener (değişiklikler geri alınır).
   - `EventApiTest`: HTTP üzerinden oluşturma (201 + `Location`, UTC saklama), sıralı listeleme, detay, olmayan ID için 404 ve
     geçersiz istek için 400 davranışını dener (değişiklikler geri alınır).
+  - `UserRegistrationApiTest`: geçerli kayıt (201 + `Location`, boşluk kırpma, küçük harf), 8 farklı boş/geçersiz alan (400, hiçbir şey yazılmaz),
+    farklı harfle ikinci kayıt (409) ve Java ön kontrolü bilerek atlandığında **veritabanı kısıtının** da 409 ürettiğini dener (değişiklikler geri alınır).
 
 ## Yol haritası
 
@@ -180,6 +246,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/events -ContentTyp
 2. [x] MySQL bağlantısı
 3. [x] Flyway ve ilk şema (`event`, `app_user`)
 4. [x] Etkinlik API'si (oluşturma, listeleme, detay)
-5. [ ] Kontenjanlı rezervasyon
-6. [ ] FIFO bekleme listesi ve otomatik terfi
-7. [ ] Eşzamanlılık (aynı anda gelen istekler) testleri
+5. [x] Kullanıcı kaydı API'si
+6. [ ] Kontenjanlı rezervasyon
+7. [ ] FIFO bekleme listesi ve otomatik terfi
+8. [ ] Eşzamanlılık (aynı anda gelen istekler) testleri
